@@ -58,10 +58,13 @@ module Network.TLS.Extension
     , EarlyDataIndication(..)
     , Cookie(..)
     , CertificateAuthorities(..)
+    , UseSRTP(..)
+    , SRTPProtectionProfile(..)
     ) where
 
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
+import Data.Serialize.Get(lookAheadM)
 
 import Network.TLS.Struct ( DistinguishedName
                           , ExtensionID
@@ -664,3 +667,54 @@ instance Extension CertificateAuthorities where
     extensionDecode MsgTCertificateRequest =
        runGetMaybe (CertificateAuthorities <$> getDNames)
     extensionDecode _ = fail "extensionDecode: CertificateAuthorities"
+
+------------------------------------------------------------
+
+data UseSRTP = UseSRTP [SRTPProtectionProfile] B.ByteString -- supported protection profiles, MKI
+  deriving(Eq, Show)
+
+instance Extension UseSRTP where
+  extensionID _ = extensionID_SRTP
+  extensionEncode (UseSRTP profiles mki) = runPut $ do
+    mapM_ (putWord16 . fromEnumSafe16) profiles
+    putOpaque8 mki
+  extensionDecode MsgTClientHello = runGetMaybe $ do
+    profiles <- getSRTPProtectionProfiles []
+    mki <- getOpaque8
+    return $ UseSRTP profiles mki
+  -- RFC 5764 says there must be only one protection profile chosen by
+  -- server in ServerHello. However Chrome WebRTC implementation
+  -- perfectly sends [0,1,0,2,0] as use_srtp body in both ClientHello
+  -- and ServerHello messages.  So we'll parse this extension in
+  -- ServerHello just like we do in in ClientHello.
+  extensionDecode MsgTServerHello = extensionDecode MsgTClientHello
+  extensionDecode _               = fail "extensionDecode: use_srtp"
+
+getSRTPProtectionProfiles :: [SRTPProtectionProfile] -> Get [SRTPProtectionProfile]
+getSRTPProtectionProfiles ps = do
+  nr <- remaining
+  if nr >= 2
+    then do mp <- lookAheadM (toEnumSafe16 <$> getWord16)
+            case mp of
+              Just p -> getSRTPProtectionProfiles (p:ps)
+              Nothing -> return $ reverse ps
+    else return $ reverse ps
+
+data SRTPProtectionProfile = SRTP_AES128_CM_HMAC_SHA1_80
+                           | SRTP_AES128_CM_HMAC_SHA1_32
+                           | SRTP_NULL_HMAC_SHA1_80
+                           | SRTP_NULL_HMAC_SHA1_32
+                           deriving(Eq,Show)
+
+instance EnumSafe16 SRTPProtectionProfile where
+  fromEnumSafe16 SRTP_AES128_CM_HMAC_SHA1_80 = 0x0001
+  fromEnumSafe16 SRTP_AES128_CM_HMAC_SHA1_32 = 0x0002
+  fromEnumSafe16 SRTP_NULL_HMAC_SHA1_80      = 0x0005
+  fromEnumSafe16 SRTP_NULL_HMAC_SHA1_32      = 0x0006
+  toEnumSafe16 0x0001 = Just SRTP_AES128_CM_HMAC_SHA1_80
+  toEnumSafe16 0x0002 = Just SRTP_AES128_CM_HMAC_SHA1_32
+  toEnumSafe16 0x0005 = Just SRTP_NULL_HMAC_SHA1_80
+  toEnumSafe16 0x0006 = Just SRTP_NULL_HMAC_SHA1_32
+  toEnumSafe16 _ = Nothing
+
+------------------------------------------------------------
