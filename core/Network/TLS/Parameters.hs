@@ -226,6 +226,9 @@ data Supported = Supported
       --   enough until 2030.  Both curves are fast because their
       --   backends are written in C.
     , supportedGroups              :: [Group]
+      -- | The data for use_srtp negotiation -- that is the list of SRTP protection profiles
+      --   and an optional MKI.
+    , supportedSRTP                :: Maybe UseSRTP
     } deriving (Show,Eq)
 
 defaultSupported :: Supported
@@ -253,6 +256,7 @@ defaultSupported = Supported
     , supportedFallbackScsv        = True
     , supportedEmptyPacket         = True
     , supportedGroups              = [X25519,P256,P384,P521]
+    , supportedSRTP                = Nothing
     }
 
 instance Default Supported where

@@ -60,6 +60,8 @@ module Network.TLS.State
     , setHelloCookie
     , getHelloCookie
     , clearHelloCookie
+    , setUseSRTP
+    , getUseSRTP
     ) where
 
 import Network.TLS.Imports
@@ -106,6 +108,8 @@ data TLSState = TLSState
     , stExporterMasterSecret :: Maybe ByteString -- TLS 1.3
     -- DTLS related
     , stHelloCookie         :: !(Maybe HelloCookie)
+    -- the result of use_srtp parameters negotiation
+    , stNegotiatedSRTP      :: Maybe UseSRTP
     }
 
 newtype TLSSt a = TLSSt { runTLSSt :: ErrT TLSError (State TLSState) a }
@@ -146,6 +150,7 @@ newTLSState rng clientContext = TLSState
     , stTLS13Cookie         = Nothing
     , stExporterMasterSecret = Nothing
     , stHelloCookie         = Nothing
+    , stNegotiatedSRTP      = Nothing
     }
 
 updateVerifiedData :: Role -> ByteString -> TLSSt ()
@@ -316,3 +321,9 @@ getHelloCookie = gets stHelloCookie
 
 clearHelloCookie :: TLSSt ()
 clearHelloCookie = modify $ \st -> st { stHelloCookie = Nothing }
+
+setUseSRTP :: Maybe UseSRTP -> TLSSt ()
+setUseSRTP msrtp = modify $ \st -> st { stNegotiatedSRTP = msrtp }
+
+getUseSRTP :: TLSSt (Maybe UseSRTP)
+getUseSRTP = gets stNegotiatedSRTP

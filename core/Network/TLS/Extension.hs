@@ -31,6 +31,7 @@ module Network.TLS.Extension
     , extensionID_PostHandshakeAuth
     , extensionID_SignatureAlgorithmsCert
     , extensionID_KeyShare
+    , extensionID_SRTP
     -- all implemented extensions
     , ServerNameType(..)
     , ServerName(..)
@@ -60,6 +61,7 @@ module Network.TLS.Extension
     , CertificateAuthorities(..)
     , UseSRTP(..)
     , SRTPProtectionProfile(..)
+    , negotiateUseSRTP
     ) where
 
 import qualified Data.ByteString as B
@@ -219,6 +221,7 @@ supportedExtensions = [ extensionID_ServerName
                       , extensionID_Cookie
                       , extensionID_PskKeyExchangeModes
                       , extensionID_CertificateAuthorities
+                      , extensionID_SRTP
                       ]
 
 ------------------------------------------------------------
@@ -716,5 +719,14 @@ instance EnumSafe16 SRTPProtectionProfile where
   toEnumSafe16 0x0005 = Just SRTP_NULL_HMAC_SHA1_80
   toEnumSafe16 0x0006 = Just SRTP_NULL_HMAC_SHA1_32
   toEnumSafe16 _ = Nothing
+
+negotiateUseSRTP :: Maybe UseSRTP -> Maybe UseSRTP -> Maybe UseSRTP
+negotiateUseSRTP mclient mserver = do
+  (UseSRTP cprof cmki) <- mclient
+  (UseSRTP sprof smki) <- mserver
+  when (cmki /= smki) Nothing -- not sure about that
+  case cprof `intersect` sprof of
+    (prof:_) -> return $ UseSRTP [prof] cmki
+    _ -> Nothing
 
 ------------------------------------------------------------

@@ -146,9 +146,16 @@ handshakeServerWith sparams ctx clientHello@(DtlsHandshake _ (ClientHello client
     extraCreds <- onServerNameIndication (serverHooks sparams) serverName
     let allCreds = extraCreds `mappend` sharedCredentials (ctxShared ctx)
 
+    -- use_srtp extension
+    let c_srtp = extensionLookup extensionID_SRTP exts >>= extensionDecode MsgTClientHello
+        s_srtp = supportedSRTP $ ctxSupported ctx
+        srtp = negotiateUseSRTP c_srtp s_srtp
+        exts' = maybe exts (flip extensionReplace exts) srtp
+    usingState_ ctx $ setUseSRTP srtp
+
     -- TLS version dependent
     if chosenVersion < TLS13 then
-        handshakeServerWithTLS12 sparams ctx chosenVersion allCreds exts ciphers serverName clientVersion compressions clientSession
+        handshakeServerWithTLS12 sparams ctx chosenVersion allCreds exts' ciphers serverName clientVersion compressions clientSession
       else do
         mapM_ ensureNullCompression compressions
         -- fixme: we should check if the client random is the same as
