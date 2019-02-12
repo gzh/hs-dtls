@@ -168,10 +168,11 @@ extensionLookup toFind = fmap (\(ExtensionRaw _ content) -> content)
                        . find (\(ExtensionRaw eid _) -> eid == toFind)
 
 extensionReplace :: (Extension a) => a -> [ExtensionRaw] -> [ExtensionRaw]
-extensionReplace ext exts =
+extensionReplace ext =
   let e = extensionID ext
-      removed = filter (\(ExtensionRaw e' _) -> e' /= e) exts
-  in removed ++ [ExtensionRaw e $ extensionEncode ext]
+  in map (\er@(ExtensionRaw e' _) -> if e == e'
+                                     then ExtensionRaw e $ extensionEncode ext
+                                     else er)
 
 -- | Store the specified keypair.  Whether the public key and private key
 -- actually match is left for the peer to discover.  We're not presently

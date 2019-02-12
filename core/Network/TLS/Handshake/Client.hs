@@ -128,6 +128,7 @@ handshakeClient' cparams ctx groups mcrand = do
                                  ,keyshareExtension
                                  ,pskExchangeModeExtension
                                  ,cookieExtension
+                                 ,srtpExtension
                                  ,preSharedKeyExtension -- MUST be last
                                  ]
 
@@ -212,6 +213,8 @@ handshakeClient' cparams ctx groups mcrand = do
             case mcookie of
               Nothing     -> return Nothing
               Just cookie -> return $ Just $ toExtensionRaw cookie
+
+        srtpExtension = return $ toExtensionRaw <$> (supportedSRTP $ ctxSupported ctx)
 
         clientSession = case clientWantSessionResume cparams of
             Nothing -> Session Nothing
@@ -578,6 +581,8 @@ processServerExtension (ExtensionRaw extID content)
         setTLS13KeyShare $ extensionDecode msgt content
   | extID == extensionID_PreSharedKey =
         setTLS13PreSharedKey $ extensionDecode MsgTServerHello content
+  | extID == extensionID_SRTP =
+        setUseSRTP $ extensionDecode MsgTServerHello content
 processServerExtension _ = return ()
 
 throwMiscErrorOnException :: String -> SomeException -> IO a
