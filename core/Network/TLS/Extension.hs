@@ -66,7 +66,6 @@ module Network.TLS.Extension
 
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
-import Data.Serialize.Get(lookAheadM)
 
 import Network.TLS.Struct ( DistinguishedName
                           , ExtensionID

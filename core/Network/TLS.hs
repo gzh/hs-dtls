@@ -136,6 +136,7 @@ module Network.TLS
     , contextNewOnSocket
 #endif
     , Bytes
+    -- * use_srtp extension-related
     , UseSRTP(..)
     , SRTPProtectionProfile(..)
     ) where

@@ -92,6 +92,7 @@ data Information = Information
     , infoNegotiatedGroup     :: Maybe Group
     , infoTLS13HandshakeMode  :: Maybe HandshakeMode13
     , infoIsEarlyDataAccepted :: Bool
+    , infoUseSRTP      :: Maybe UseSRTP
     } deriving (Show,Eq)
 
 -- | A TLS Context keep tls specific state, parameters and backend information.
@@ -168,8 +169,9 @@ contextGetInformation ctx = do
     let accepted = case hstate of
             Just st -> hstTLS13RTT0Status st == RTT0Accepted
             Nothing -> False
+    srtp   <- usingState_ ctx $ getUseSRTP
     case (ver, cipher) of
-        (Just v, Just c) -> return $ Just $ Information v c comp ms cr sr grp hm13 accepted
+        (Just v, Just c) -> return $ Just $ Information v c comp ms cr sr grp hm13 accepted srtp
         _                -> return Nothing
 
 contextSend :: Context -> ByteString -> IO ()
