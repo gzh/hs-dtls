@@ -12,12 +12,14 @@ module Common
     , makeAddrInfo
     , AddrInfo(..)
     , getCertificateStore
+    , makeUseSRTP
     ) where
 
 import Data.Char (isDigit)
 import Data.Maybe (fromJust)
 import Numeric (showHex)
 import Network.Socket
+import qualified Data.ByteString as B
 
 import Data.X509.CertificateStore
 import System.X509
@@ -118,6 +120,7 @@ printHandshakeInfo ctx = do
             when (infoVersion i == TLS13) $ do
                 putStrLn ("handshake emode: " ++ show (fromJust (infoTLS13HandshakeMode i)))
                 putStrLn ("early data accepted: " ++ show (infoIsEarlyDataAccepted i))
+            putStrLn ("use_srtp: " ++ maybe "(none)" show (infoUseSRTP i))
     sni <- getClientSNI ctx
     case sni of
         Nothing -> return ()
@@ -148,3 +151,8 @@ getCertificateStore paths = foldM readPathAppend mempty paths
         case mstore of
             Nothing -> error ("invalid certificate store: " ++ path)
             Just st -> return $! mappend st acc
+
+makeUseSRTP :: Bool -> Maybe UseSRTP
+makeUseSRTP False = Nothing
+makeUseSRTP True = Just $ UseSRTP [SRTP_AES128_CM_HMAC_SHA1_32
+                                  ,SRTP_AES128_CM_HMAC_SHA1_80] B.empty

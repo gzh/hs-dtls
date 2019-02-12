@@ -16,7 +16,7 @@ import System.Exit
 import System.IO
 import System.Timeout
 
-import Network.TLS
+import Network.TLS hiding(UseSRTP)
 import Network.TLS.Extra.Cipher
 
 import Common
@@ -70,6 +70,7 @@ getDefaultParams flags host store sStorage certCredsRequest session earlyData =
         { clientSupported = def { supportedVersions = supportedVers
                                 , supportedCiphers = myCiphers
                                 , supportedGroups = getGroups flags
+                                , supportedSRTP = makeUseSRTP $ UseSRTP `elem` flags
                                 }
         , clientWantSessionResume = session
         , clientUseServerNameIndication = NoSNI `notElem` flags
@@ -158,6 +159,7 @@ data Flag = Verbose | Debug | IODebug | NoValidateCert | Session | Http11
           | BenchSend
           | BenchRecv
           | BenchData String
+          | UseSRTP
           | UseCipher String
           | ListCiphers
           | ListGroups
@@ -199,6 +201,7 @@ options =
     , Option []     ["bench-send"]   (NoArg BenchSend) "benchmark send path. only with compatible server"
     , Option []     ["bench-recv"]   (NoArg BenchRecv) "benchmark recv path. only with compatible server"
     , Option []     ["bench-data"] (ReqArg BenchData "amount") "amount of data to benchmark with"
+    , Option []     ["use-srtp"] (NoArg UseSRTP) "negotiate srtp protection profile"
     , Option []     ["use-cipher"] (ReqArg UseCipher "cipher-id") "use a specific cipher"
     , Option []     ["list-ciphers"] (NoArg ListCiphers) "list all ciphers supported and exit"
     , Option []     ["list-groups"] (NoArg ListGroups) "list all groups supported and exit"
