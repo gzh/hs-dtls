@@ -150,12 +150,11 @@ handshakeServerWith sparams ctx clientHello@(DtlsHandshake _ (ClientHello client
     let c_srtp = extensionLookup extensionID_SRTP exts >>= extensionDecode MsgTClientHello
         s_srtp = supportedSRTP $ ctxSupported ctx
         srtp = negotiateUseSRTP c_srtp s_srtp
-        exts' = maybe exts (flip extensionReplace exts) srtp
     usingState_ ctx $ setUseSRTP srtp
 
     -- TLS version dependent
     if chosenVersion < TLS13 then
-        handshakeServerWithTLS12 sparams ctx chosenVersion allCreds exts' ciphers serverName clientVersion compressions clientSession
+        handshakeServerWithTLS12 sparams ctx chosenVersion allCreds exts ciphers serverName clientVersion compressions clientSession
       else do
         mapM_ ensureNullCompression compressions
         -- fixme: we should check if the client random is the same as
@@ -361,7 +360,9 @@ doHandshake sparams mcred ctx chosenVersion usedCipher usedCompression clientSes
                       -- field of this extension SHALL be empty.
                       Just _  -> return [ ExtensionRaw extensionID_ServerName ""]
                       Nothing -> return []
-            let extensions = secRengExt ++ protoExt ++ sniExt
+            srtpExt  <- maybe [] (return . ExtensionRaw extensionID_SRTP . extensionEncode) <$>
+                        usingState_ ctx getUseSRTP
+            let extensions = secRengExt ++ protoExt ++ srtpExt ++ sniExt
             usingState_ ctx (setVersion chosenVersion)
             usingHState ctx $ setServerHelloParameters chosenVersion srand usedCipher usedCompression
             return $ ServerHello chosenVersion srand session (cipherID usedCipher)

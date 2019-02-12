@@ -136,6 +136,8 @@ module Network.TLS
     , contextNewOnSocket
 #endif
     , Bytes
+    , UseSRTP(..)
+    , SRTPProtectionProfile(..)
     ) where
 
 import Network.TLS.Backend (Backend(..), HasBackend(..), makeStreamRecvFromDgram, makeDgramSocketBackend)
@@ -158,6 +160,7 @@ import Network.TLS.Session
 import Network.TLS.X509
 import Network.TLS.Types
 import Network.TLS.Handshake.State (HandshakeMode13(..))
+import Network.TLS.Extension(UseSRTP(..),SRTPProtectionProfile(..))
 import Data.X509 (PubKey(..), PrivKey(..))
 import Data.X509.Validation hiding (HostName)
 import Data.ByteString as B

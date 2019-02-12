@@ -15,7 +15,6 @@ module Network.TLS.Handshake.Common
     , recvPacketHandshake
     , onRecvStateHandshake
     , extensionLookup
-    , extensionReplace
     , getSessionData
     , storePrivInfo
     , isSupportedGroup
@@ -41,7 +40,6 @@ import Network.TLS.Crypto
 import Network.TLS.Util
 import Network.TLS.X509
 import Network.TLS.Imports
-import Network.TLS.Extension
 
 import Control.Monad.State.Strict
 import Control.Exception (throwIO)
@@ -166,13 +164,6 @@ getSessionData ctx = do
 extensionLookup :: ExtensionID -> [ExtensionRaw] -> Maybe ByteString
 extensionLookup toFind = fmap (\(ExtensionRaw _ content) -> content)
                        . find (\(ExtensionRaw eid _) -> eid == toFind)
-
-extensionReplace :: (Extension a) => a -> [ExtensionRaw] -> [ExtensionRaw]
-extensionReplace ext =
-  let e = extensionID ext
-  in map (\er@(ExtensionRaw e' _) -> if e == e'
-                                     then ExtensionRaw e $ extensionEncode ext
-                                     else er)
 
 -- | Store the specified keypair.  Whether the public key and private key
 -- actually match is left for the peer to discover.  We're not presently
