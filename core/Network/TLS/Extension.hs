@@ -679,29 +679,16 @@ data UseSRTP = UseSRTP [SRTPProtectionProfile] B.ByteString -- supported protect
 instance Extension UseSRTP where
   extensionID _ = extensionID_SRTP
   extensionEncode (UseSRTP profiles mki) = runPut $ do
+    putWord16 $ fromIntegral $ 2*(length profiles)
     mapM_ (putWord16 . fromEnumSafe16) profiles
     putOpaque8 mki
   extensionDecode MsgTClientHello = runGetMaybe $ do
-    profiles <- getSRTPProtectionProfiles []
+    len <- (`div` 2) <$> getWord16
+    mprofiles <- replicateM (fromIntegral len) (toEnumSafe16 <$> getWord16)
     mki <- getOpaque8
-    return $ UseSRTP profiles mki
-  -- RFC 5764 says there must be only one protection profile chosen by
-  -- server in ServerHello. However Chrome WebRTC implementation
-  -- perfectly sends [0,1,0,2,0] as use_srtp body in both ClientHello
-  -- and ServerHello messages.  So we'll parse this extension in
-  -- ServerHello just like we do in in ClientHello.
+    return $ UseSRTP (catMaybes mprofiles) mki
   extensionDecode MsgTServerHello = extensionDecode MsgTClientHello
   extensionDecode _               = fail "extensionDecode: use_srtp"
-
-getSRTPProtectionProfiles :: [SRTPProtectionProfile] -> Get [SRTPProtectionProfile]
-getSRTPProtectionProfiles ps = do
-  nr <- remaining
-  if nr >= 2
-    then do mp <- lookAheadM (toEnumSafe16 <$> getWord16)
-            case mp of
-              Just p -> getSRTPProtectionProfiles (p:ps)
-              Nothing -> return $ reverse ps
-    else return $ reverse ps
 
 data SRTPProtectionProfile = SRTP_AES128_CM_HMAC_SHA1_80
                            | SRTP_AES128_CM_HMAC_SHA1_32
