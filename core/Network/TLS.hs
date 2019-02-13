@@ -139,6 +139,7 @@ module Network.TLS
     -- * use_srtp extension-related
     , UseSRTP(..)
     , SRTPProtectionProfile(..)
+    , prf_TLS
     ) where
 
 import Network.TLS.Backend (Backend(..), HasBackend(..), makeStreamRecvFromDgram, makeDgramSocketBackend)
@@ -160,6 +161,7 @@ import Network.TLS.Core
 import Network.TLS.Session
 import Network.TLS.X509
 import Network.TLS.Types
+import Network.TLS.MAC
 import Network.TLS.Handshake.State (HandshakeMode13(..))
 import Network.TLS.Extension(UseSRTP(..),SRTPProtectionProfile(..))
 import Data.X509 (PubKey(..), PrivKey(..))
