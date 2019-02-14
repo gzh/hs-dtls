@@ -125,7 +125,9 @@ data Context = Context
     , ctxMTU              :: Word16        -- DTLS fragment size
     , ctxHelloCookieGen   :: IO HelloCookie
     , ctxHelloCookieVerify:: HelloCookie -> IO Bool
-    , ctxNextHsMsgSeq     :: Word16 -> IO [Word16] -- generator for next handshake messages' DTLS sequence numbers
+    , ctxNextHsMsgSeq     :: Word16 -> IO [Word16] -- generator for next outgoing handshake messages' DTLS sequence numbers
+    , ctxUpdateHsMsgSeq   :: Word16 -> IO Bool -- guard for incoming handshake messages' DTLS sequence numbers
+    , ctxResetHsMsgSeq    :: IO ()
     , ctxRecordCache      :: Maybe (Record Plaintext) -> IO (Maybe (Record Plaintext))
     }
 

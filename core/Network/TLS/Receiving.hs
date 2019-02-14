@@ -43,7 +43,7 @@ processPacket ctx (Record ProtocolType_ChangeCipherSpec _ _ fragment) =
 
 processPacket ctx (Record ProtocolType_Handshake ver _ fragment) = do
     keyxchg <- getHState ctx >>= \hs -> return (hs >>= hstPendingCipher >>= Just . cipherKeyExchange)
-    usingState ctx $ do
+    ehss <- usingState ctx $ do
         let currentParams = CurrentParams
                             { cParamsVersion     = ver
                             , cParamsKeyXchgType = keyxchg
@@ -52,7 +52,10 @@ processPacket ctx (Record ProtocolType_Handshake ver _ fragment) = do
         mCont <- gets stHandshakeRecordCont
         modify (\st -> st { stHandshakeRecordCont = Nothing })
         hss   <- parseMany currentParams mCont (fragmentGetBytes fragment)
-        return $ Handshake hss
+        return hss
+    case ehss of
+      Left err -> return $ Left err
+      Right hss -> (Right . Handshake . catMaybes) <$> mapM (replayGuard ctx) hss
   where decodeHandshakeRecordX = if isDTLS ver
                                  then decodeHandshakeRecordsDTLS
                                  else decodeHandshakeRecord
@@ -78,3 +81,9 @@ switchRxEncryption ctx =
     liftIO $ modifyMVar_ (ctxRxState ctx) (\rxprev -> return $ let rx = fromJust "rx-state" mrx
                                                                    epoch = stSeqNumber rxprev
                                                                in rx { stSeqNumber = nextEpoch epoch })
+
+replayGuard :: Context -> Handshake -> IO (Maybe Handshake)
+replayGuard ctx hs@(DtlsHandshake ind _) = do
+  pass <- ctxUpdateHsMsgSeq ctx ind
+  if pass then return $ Just hs else return Nothing
+replayGuard _ hs = return $ Just hs

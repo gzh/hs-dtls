@@ -790,3 +790,5 @@ encodeSignedECDHParams dhparams cran sran = runPut $
 fromJustM :: Monad m => String -> Maybe a -> m a
 fromJustM what Nothing  = fail ("fromJustM " ++ what ++ ": Nothing")
 fromJustM _    (Just x) = return x
+
+
