@@ -110,6 +110,7 @@ recvPacketHandshake :: Context -> IO [Handshake]
 recvPacketHandshake ctx = do
     pkts <- recvPacket ctx
     case pkts of
+        Right (Handshake []) -> recvPacketHandshake ctx
         Right (Handshake l) -> return l
         Right x@(AppData _) -> do
             -- If a TLS13 server decides to reject RTT0 data, the server should
