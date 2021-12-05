@@ -8,11 +8,11 @@ class HasSequenceNumber a where
   getSequenceNumber :: a -> Word64
 
 
-data (HasSequenceNumber a) => Window a = Window
-                                         !Word64 -- sequence number of a next expected record
-                                         !Word64 -- bitmask of cached records
-                                         ![(Word64, a)] -- the cache itself
-                                         deriving(Show)
+data Window a = Window
+                !Word64 -- sequence number of a next expected record
+                !Word64 -- bitmask of cached records
+                ![(Word64, a)] -- the cache itself
+              deriving(Show)
 
 -- Extract a record from cache, if there's a record with expected sequence number
 maybeGetNext :: (HasSequenceNumber a) => Window a -> (Window a, Maybe a)
