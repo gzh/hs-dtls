@@ -72,6 +72,7 @@ Library
                      Network.TLS.Extra
                      Network.TLS.Extra.Cipher
                      Network.TLS.Extra.FFDHE
+                     Network.TLS.Extension
   other-modules:     Network.TLS.Cap
                      Network.TLS.Struct
                      Network.TLS.Struct13
@@ -86,7 +87,6 @@ Library
                      Network.TLS.Crypto.IES
                      Network.TLS.Crypto.Types
                      Network.TLS.ErrT
-                     Network.TLS.Extension
                      Network.TLS.Handshake
                      Network.TLS.Handshake.Common
                      Network.TLS.Handshake.Common13

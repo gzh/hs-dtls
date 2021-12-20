@@ -115,6 +115,9 @@ data TLSState = TLSState
 newtype TLSSt a = TLSSt { runTLSSt :: ErrT TLSError (State TLSState) a }
     deriving (Monad, MonadError TLSError, Functor, Applicative)
 
+instance MonadFail TLSSt where
+  fail = throwError . Error_Misc
+
 instance MonadState TLSState TLSSt where
     put x = TLSSt (lift $ put x)
     get   = TLSSt (lift get)

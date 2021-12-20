@@ -27,6 +27,7 @@ import System.X509
 import Network.TLS hiding (HostName)
 import Network.TLS.Extra.Cipher
 import Network.TLS.Extra.FFDHE
+import Network.TLS.Extension(UseSRTP(..))
 
 import Imports
 

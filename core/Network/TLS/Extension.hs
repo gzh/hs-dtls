@@ -687,7 +687,7 @@ instance Extension UseSRTP where
     mki <- getOpaque8
     return $ UseSRTP (catMaybes mprofiles) mki
   extensionDecode MsgTServerHello = extensionDecode MsgTClientHello
-  extensionDecode _               = fail "extensionDecode: use_srtp"
+  extensionDecode _               = const $ fail "extensionDecode: use_srtp"
 
 data SRTPProtectionProfile = SRTP_AES128_CM_HMAC_SHA1_80
                            | SRTP_AES128_CM_HMAC_SHA1_32
