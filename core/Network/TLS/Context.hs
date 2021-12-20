@@ -190,10 +190,12 @@ contextNew backend params = liftIO $ do
             , ctxMTU              = 1024
             , ctxHelloCookieGen   = cookieGen
             , ctxHelloCookieVerify= cookieVerify
-            , ctxNextHsMsgSeq     = \count -> atomicModifyIORef' hsMsgSeqOut (\sn -> (sn+count, [sn..sn+count-1]))
-            , ctxUpdateHsMsgSeq   = \msgSeq -> atomicModifyIORef' hsMsgSeqIn (\sn -> if msgSeq >= sn
-                                                                                     then (msgSeq+1, True)
-                                                                                     else (sn, False))
+            , ctxNextHsMsgSeq     = \count -> atomicModifyIORef' hsMsgSeqOut
+                                              (\sn -> (sn+count, [sn..sn+count-1]))
+            , ctxUpdateHsMsgSeq   = \msgSeq -> atomicModifyIORef' hsMsgSeqIn
+                                               (\sn -> if msgSeq >= sn
+                                                       then (msgSeq+1, True)
+                                                       else (sn, False))
             , ctxResetHsMsgSeq    = do atomicModifyIORef' hsMsgSeqOut $ const (0, ())
                                        atomicModifyIORef' hsMsgSeqIn  $ const (0, ())
             , ctxRecordCache      = maybeCacheMaybeGetNext recWindow

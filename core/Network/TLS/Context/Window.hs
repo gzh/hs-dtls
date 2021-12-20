@@ -1,4 +1,8 @@
-module Network.TLS.Context.Window(HasSequenceNumber(..),maybeCacheMaybeGetNext, Window,newWindow)  where
+module Network.TLS.Context.Window(HasSequenceNumber(..)
+                                 ,maybeCacheMaybeGetNext
+                                 ,Window
+                                 ,newWindow
+                                 ) where
 
 import Data.Word
 import Data.IORef
@@ -27,7 +31,7 @@ maybeGetNext window@(Window next mask cache) =
 
 -- Add a record to the cache.
 -- If this cannot be done within current window, then
---   - either "shift" it by exactly the number if missing records,
+--   - either "shift" it by exactly the number of missing records,
 --     if there's not too many of them missing to catch up with the new record,
 --   - or, if that won't help (i.e. the new arrived record with way too different
 --     sequence number) - then reset the window
