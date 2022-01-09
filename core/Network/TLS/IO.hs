@@ -37,8 +37,10 @@ import qualified Data.ByteString as B
 
 import Data.IORef
 import Control.Monad.Reader
-import Control.Exception (finally, throwIO)
+import Control.Exception (finally, throwIO, onException)
+import Control.Concurrent
 import System.IO.Error (mkIOError, eofErrorType)
+import Control.Concurrent.Async
 
 checkValid :: Context -> IO ()
 checkValid ctx = do
@@ -139,8 +141,8 @@ recvRecordCacheAware sslv2 ctx = do
 -- | receive one packet from the context that contains 1 or
 -- many messages (many only in case of handshake). if will returns a
 -- TLSError if the packet is unexpected or malformed
-recvPacket :: MonadIO m => Context -> m (Either TLSError Packet)
-recvPacket ctx = liftIO $ do
+recvPacketImpl :: MonadIO m => Context -> m (Either TLSError Packet)
+recvPacketImpl ctx = liftIO $ do
     compatSSLv2 <- ctxHasSSLv2ClientHello ctx
     erecord     <- recvRecordCacheAware compatSSLv2 ctx
     case erecord of
@@ -148,7 +150,7 @@ recvPacket ctx = liftIO $ do
         Right record -> do
             hrr <- usingState_ ctx getTLS13HRR
             if hrr && isCCS record then
-                recvPacket ctx
+                recvPacketImpl ctx
               else do
                 pktRecv <- processPacket ctx record
                 pkt <- case pktRecv of
@@ -160,7 +162,22 @@ recvPacket ctx = liftIO $ do
                     Right p -> withLog ctx $ \logging -> loggingPacketRecv logging $ show p
                     _       -> return ()
                 when compatSSLv2 $ ctxDisableSSLv2ClientHello ctx
+                resetRetransmitAcc ctx
                 return pkt
+
+recvPacket :: MonadIO m => Context -> m (Either TLSError Packet)
+recvPacket ctx = do
+  er <- liftIO $ race (resendLoop ctx) (recvPacketImpl ctx)
+  case er of
+    Left _ -> return $ Left $ Error_Misc "Timeout on receiving packet"
+    Right p -> return p
+
+resendLoop :: Context -> IO ()
+resendLoop ctx = go $ map (\n -> 200000 * (min 10 $ 1 `shiftL` n)) [0..9]
+  where go [] = return ()
+        go (t:ts) = do threadDelay t
+                       resendPacketDTLS ctx
+                       go ts
 
 -- | Send one packet to the context
 sendPacketTLS :: MonadIO m => Context -> Packet -> m ()
@@ -182,18 +199,53 @@ sendPacketTLS ctx pkt = do
 
 sendPacketDTLS :: MonadIO m => Context -> Packet -> m ()
 sendPacketDTLS ctx pkt = do
+  srctx <- liftIO $ takeMVar (ctxRetransmitAcc ctx)
+  case srctx of
+    Nothing -> return ()
+    Just pkt' -> liftIO $ withLog ctx $ \logging -> loggingPacketSent logging $
+      mconcat ["Packet is to be sent before receival of previous "
+              ,show $ length pkt'
+              ," packets was acknowledged"]
+  n <- sendPacketDTLSImpl ctx pkt
+  liftIO $ putMVar (ctxRetransmitAcc ctx) (Just $ maybe n (++n) srctx)
+
+resendPacketDTLS :: Context -> IO ()
+resendPacketDTLS ctx = do
+  srctx <- liftIO $ readMVar (ctxRetransmitAcc ctx)
+  case srctx of
+    Nothing -> return ()
+    Just pkt -> do
+      withLog ctx $ \logging -> loggingPacketSent logging
+        $ "Retransmitting packets in qty of "++(show $ length pkt)
+      forM_ pkt $ sendBytes ctx
+
+resetRetransmitAcc :: Context -> IO ()
+resetRetransmitAcc ctx = do
+  _ <- takeMVar (ctxRetransmitAcc ctx)
+  putMVar (ctxRetransmitAcc ctx) Nothing
+
+sendPacketDTLSImpl :: MonadIO m => Context -> Packet -> m [ByteString]
+sendPacketDTLSImpl ctx pkt = do
     edataToSend <- liftIO $ do
                         withLog ctx $ \logging -> loggingPacketSent logging (show pkt)
                         writePacketDTLS ctx pkt
     case edataToSend of
         Left err         -> throwCore err
-        Right dataToSend -> mapM_ (sendBytes ctx) dataToSend
+        Right dataToSend -> do forM_ dataToSend $ sendBytes ctx
+                               return dataToSend
 
 sendPacket :: MonadIO m => Context -> Packet -> m ()
 sendPacket ctx pkt =
-  if ctxIsDTLS ctx
-  then sendPacketDTLS ctx pkt
-  else sendPacketTLS ctx pkt
+  liftIO $
+  (if ctxIsDTLS ctx
+   then sendPacketDTLS ctx pkt
+   else sendPacketTLS ctx pkt)
+  `onException`
+  (withLog ctx $ \logging ->
+      loggingPacketSent logging $ mconcat
+      ["Exception on sending packet "
+      ,show pkt])
+
 
 
 sendPacket13 :: MonadIO m => Context -> Packet13 -> m ()

@@ -40,9 +40,10 @@ cacheRecord :: (HasSequenceNumber a) => a -> Window a -> Window a
 cacheRecord record window@(Window next mask cache) =
   let sn = getSequenceNumber record
       nbit = sn - next
+      nmaxMissing = 2 -- how many records we're allowed to miss. may be up to 64
   in if nbit < 0
      then window
-     else if nbit < 64
+     else if nbit < nmaxMissing
           then let mask' = mask .|. (1 `shiftL` (fromIntegral nbit))
                    cache' = ((sn, record) : cache)
                in if mask /= mask'

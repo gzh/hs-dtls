@@ -778,7 +778,7 @@ doHandshake13 sparams ctx allCreds chosenVersion usedCipher exts usedHash client
                 setEstablished ctx Established
                 setRxState ctx usedHash usedCipher clientApplicationTrafficSecret0
                else
-                decryptError "cannot verify finished"
+                decryptError "cannot verify finished13"
         expectFinished hs = unexpected (show hs) (Just "finished 13")
 
     let expectEndOfEarlyData EndOfEarlyData13 =
@@ -1107,16 +1107,16 @@ guardDTLSHello :: ServerParams -> Context -> Handshake -> IO () -> IO ()
 guardDTLSHello sparams ctx clientHello@(DtlsHandshake _ (ClientHello cver _ _ cookie _ _ _ _)) handshakeActions =
     if isDTLS cver
     then if cookie == HelloCookie B.empty
-         then do processHandshake ctx clientHello
-                 cookie' <- ctxHelloCookieGen ctx
+         then do cookie' <- ctxHelloCookieGen ctx
                  sendPacket ctx $ Handshake [HelloVerifyRequest DTLS10 cookie']
                  hss <- recvPacketHandshake ctx
                  case hss of
                    [ch] -> handshakeServerWith sparams ctx ch
-                   _    -> fail ("unexpected handshake received, excepting client hello and received " ++ show hss)
+                   _    -> fail ("unexpected handshake received, expected client hello and received " ++ show hss)
          else do verified <- ctxHelloCookieVerify ctx cookie
                  if verified
-                   then handshakeActions
+                   then do processHandshake ctx clientHello
+                           handshakeActions
                    else fail "HelloVerify mechanism failed (cookie verification failed)"
     else handshakeActions
 guardDTLSHello _ _ _ _ = error "guardDTLSHello should only be called on DTLS ClientHello handshake messages"

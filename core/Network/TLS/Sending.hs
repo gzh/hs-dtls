@@ -88,7 +88,9 @@ engageAndEncode record = record >>= engageRecord >>= encodeRecord
 writePacketDTLS :: Context -> Packet -> IO (Either TLSError [ByteString])
 writePacketDTLS ctx (Handshake hss') = do
     let mtu = ctxMTU ctx
-    msgSeq <- ctxNextHsMsgSeq ctx (fromIntegral $ length hss')
+    msgSeq <- case hss' of
+                [HelloVerifyRequest {}] -> return [0]
+                _ -> ctxNextHsMsgSeq ctx (fromIntegral $ length hss')
     let hss = zipWith DtlsHandshake msgSeq hss'
     let updateCtx hs = do
         case hs of
@@ -99,11 +101,13 @@ writePacketDTLS ctx (Handshake hss') = do
         -- the Finished MAC MUST be computed as if each handshake
         -- message had been sent as a single fragment." - this is why 65535.
         let encodedForFinDgst = encodeHandshakeDTLS 65535 hs
-        usingHState ctx $ do
-            when (certVerifyHandshakeMaterial hs) $ mapM_ addHandshakeMessage encodedForFinDgst
-            when (finishHandshakeMaterial hs) $ mapM_ updateHandshakeDigest encodedForFinDgst
+        when (certVerifyHandshakeMaterial hs) $
+          usingHState ctx $ mapM_ addHandshakeMessage encodedForFinDgst
+        when (finishHandshakeMaterial hs) $
+          usingHState ctx $ mapM_ updateHandshakeDigest encodedForFinDgst
     mapM_ updateCtx hss 
-    prepareRecord ctx $ sequence $ map engageAndEncode $ makeHsRecordDTLS mtu hss
+    x <- prepareRecord ctx $ sequence $ map engageAndEncode $ makeHsRecordDTLS mtu hss
+    return x
 writePacketDTLS ctx pkt = do
     let mtu = ctxMTU ctx
     d <- prepareRecord ctx $ return <$> (engageAndEncode $ makeNonHsRecordDTLS mtu pkt)

@@ -29,6 +29,8 @@ import Network.TLS.Cipher
 import Network.TLS.Util
 import Network.TLS.Imports
 
+import qualified Data.ByteString as BS
+
 processPacket :: Context -> Record Plaintext -> IO (Either TLSError Packet)
 
 processPacket _ (Record ProtocolType_AppData _ _ fragment) = return $ Right $ AppData $ fragmentGetBytes fragment
@@ -55,6 +57,10 @@ processPacket ctx (Record ProtocolType_Handshake ver _ fragment) = do
         return hss
     case ehss of
       Left err -> return $ Left err
+      Right (hss@[DtlsHandshake _ (ClientHello _ _ _ cookie _ _ _ _)]) ->
+        if cookie == HelloCookie BS.empty
+        then return $ Right $ Handshake hss
+        else (Right . Handshake . catMaybes) <$> mapM (replayGuard ctx) hss
       Right hss -> (Right . Handshake . catMaybes) <$> mapM (replayGuard ctx) hss
   where decodeHandshakeRecordX = if isDTLS ver
                                  then decodeHandshakeRecordsDTLS

@@ -156,14 +156,15 @@ contextNew backend params = liftIO $ do
     hooks <- newIORef defaultHooks
     tx    <- newMVar newRecordState
     rx    <- newMVar newRecordState
+    srctx <- newMVar Nothing
     hs    <- newMVar Nothing
     as    <- newIORef []
     lockWrite <- newMVar ()
     lockRead  <- newMVar ()
     lockState <- newMVar ()
     (cookieGen, cookieVerify) <- makeHelloCookieMethods
-    hsMsgSeqOut <- newIORef 0
-    hsMsgSeqIn <- newIORef 0
+    hsMsgSeqOut <- newIORef 1
+    hsMsgSeqIn <- newIORef 1
     recWindow <- newIORef newWindow
 
     return Context
@@ -173,6 +174,7 @@ contextNew backend params = liftIO $ do
             , ctxState        = stvar
             , ctxTxState      = tx
             , ctxRxState      = rx
+            , ctxRetransmitAcc= srctx
             , ctxHandshake    = hs
             , ctxDoHandshake  = doHandshake params
             , ctxDoHandshakeWith  = doHandshakeWith params
@@ -196,8 +198,6 @@ contextNew backend params = liftIO $ do
                                                (\sn -> if msgSeq >= sn
                                                        then (msgSeq+1, True)
                                                        else (sn, False))
-            , ctxResetHsMsgSeq    = do atomicModifyIORef' hsMsgSeqOut $ const (0, ())
-                                       atomicModifyIORef' hsMsgSeqIn  $ const (0, ())
             , ctxRecordCache      = maybeCacheMaybeGetNext recWindow
             }
 
