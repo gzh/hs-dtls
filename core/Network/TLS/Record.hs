@@ -37,6 +37,7 @@ module Network.TLS.Record
     -- * DTLS related record sequence number handling
     , nextEpoch
     , incrSeqNumber
+    , HasSequenceNumber(..)
     ) where
 
 import Network.TLS.Record.Types

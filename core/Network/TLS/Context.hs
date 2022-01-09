@@ -67,7 +67,6 @@ module Network.TLS.Context
 
 import Network.TLS.Backend
 import Network.TLS.Context.Internal
-import Network.TLS.Context.Window
 import Network.TLS.Struct
 import Network.TLS.State
 import Network.TLS.Hooks
@@ -165,7 +164,7 @@ contextNew backend params = liftIO $ do
     (cookieGen, cookieVerify) <- makeHelloCookieMethods
     hsMsgSeqOut <- newIORef 1
     hsMsgSeqIn <- newIORef 1
-    recWindow <- newIORef newWindow
+    recMsgSeqIn <- newIORef 0
 
     return Context
             { ctxConnection   = getBackend backend
@@ -198,7 +197,10 @@ contextNew backend params = liftIO $ do
                                                (\sn -> if msgSeq >= sn
                                                        then (msgSeq+1, True)
                                                        else (sn, False))
-            , ctxRecordCache      = maybeCacheMaybeGetNext recWindow
+            , ctxUpdateRecMsgSeq  = \recSeq -> atomicModifyIORef' recMsgSeqIn
+                                               (\sn -> if recSeq >= sn
+                                                       then (recSeq+1, True)
+                                                       else (sn, False))
             }
 
 -- | create a new context on an handle.

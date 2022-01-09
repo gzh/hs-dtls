@@ -79,7 +79,6 @@ Library
                      Network.TLS.Core
                      Network.TLS.Context
                      Network.TLS.Context.Internal
-                     Network.TLS.Context.Window
                      Network.TLS.Credentials
                      Network.TLS.Backend
                      Network.TLS.Crypto

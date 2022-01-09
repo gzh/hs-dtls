@@ -119,51 +119,39 @@ isCCS :: Record a -> Bool
 isCCS (Record ProtocolType_ChangeCipherSpec _ _ _) = True
 isCCS _                                            = False
 
--- Receive records and pass them through cache/replay window/reorder procedures (in case of DTLS)
-recvRecordCacheAware :: Bool -> Context -> IO (Either TLSError (Record Plaintext))
-recvRecordCacheAware sslv2 ctx = do
-  mr <- ctxRecordCache ctx Nothing
-  case mr of
-    Just r -> return $ Right r
-    Nothing -> do
-      er <- recvRecord sslv2 ctx
-      case er of
-        Left _ -> return er
-        Right r@(Record _ ver _ _) -> 
-          if not $ isDTLS ver
-          then return er
-          else do
-            mr' <- ctxRecordCache ctx $ Just r
-            case mr' of
-              Just r' -> return $ Right r'
-              Nothing -> recvRecordCacheAware sslv2 ctx
-
 -- | receive one packet from the context that contains 1 or
 -- many messages (many only in case of handshake). if will returns a
 -- TLSError if the packet is unexpected or malformed
 recvPacketImpl :: MonadIO m => Context -> m (Either TLSError Packet)
 recvPacketImpl ctx = liftIO $ do
     compatSSLv2 <- ctxHasSSLv2ClientHello ctx
-    erecord     <- recvRecordCacheAware compatSSLv2 ctx
+    erecord     <- recvRecord compatSSLv2 ctx
     case erecord of
-        Left err     -> return $ Left err
-        Right record -> do
-            hrr <- usingState_ ctx getTLS13HRR
-            if hrr && isCCS record then
-                recvPacketImpl ctx
-              else do
-                pktRecv <- processPacket ctx record
-                pkt <- case pktRecv of
-                        Right (Handshake hss) ->
-                            ctxWithHooks ctx $ \hooks ->
-                                Right . Handshake <$> mapM (hookRecvHandshake hooks) hss
-                        _                     -> return pktRecv
-                case pkt of
-                    Right p -> withLog ctx $ \logging -> loggingPacketRecv logging $ show p
-                    _       -> return ()
-                when compatSSLv2 $ ctxDisableSSLv2ClientHello ctx
-                resetRetransmitAcc ctx
-                return pkt
+      Left err     -> return $ Left err
+      Right record -> do
+        ordered <- ctxUpdateRecMsgSeq ctx $ getSequenceNumber record
+        if ordered
+          then do hrr <- usingState_ ctx getTLS13HRR
+                  if hrr && isCCS record
+                    then recvPacketImpl ctx
+                    else do
+                    pktRecv <- processPacket ctx record
+                    pkt <- case pktRecv of
+                             Right (Handshake hss) ->
+                               ctxWithHooks ctx $ \hooks ->
+                               Right . Handshake <$> mapM (hookRecvHandshake hooks) hss
+                             _ -> return pktRecv
+                    case pkt of
+                      Right p -> withLog ctx $ \logging -> loggingPacketRecv logging $ show p
+                      _ -> return ()
+                    when compatSSLv2 $ ctxDisableSSLv2ClientHello ctx
+                    resetRetransmitAcc ctx
+                    return pkt
+          else do
+          withLog ctx $ \logging -> loggingPacketRecv logging $
+            mconcat ["Dropped record because of its sequence number: "
+                    ,show record]
+          recvPacketImpl ctx
 
 recvPacket :: MonadIO m => Context -> m (Either TLSError Packet)
 recvPacket ctx = do
