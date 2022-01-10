@@ -249,10 +249,10 @@ makeHelloCookieMethods = do
     let mkrandom :: Int -> IO B.ByteString
         mkrandom bytes = atomicModifyIORef' rng $ swap . randomBytesGenerate bytes
     secret <- mkrandom 16
+    salt <- mkrandom 8
     let generate = do
           (Elapsed (Seconds ts)) <- timeCurrent
           let tsbs = encode ts
-          salt <- mkrandom 8
           let mac :: HMAC.HMAC MD5
               mac = HMAC.hmac secret $ salt `mappend` tsbs
           return $ HelloCookie $ salt `mappend` tsbs `mappend` (BA.convert $ HMAC.hmacGetDigest mac)
