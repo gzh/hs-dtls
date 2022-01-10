@@ -186,16 +186,17 @@ sendPacketTLS ctx pkt = do
         isNonNullAppData _           = False
 
 sendPacketDTLS :: MonadIO m => Context -> Packet -> m ()
-sendPacketDTLS ctx pkt = do
-  srctx <- liftIO $ takeMVar (ctxRetransmitAcc ctx)
-  case srctx of
+sendPacketDTLS ctx pkt' = do
+  mprev <- liftIO $ takeMVar (ctxRetransmitAcc ctx)
+  pkt <- liftIO $ mkDtlsHs ctx pkt'
+  case mprev of
     Nothing -> return ()
-    Just pkt' -> liftIO $ withLog ctx $ \logging -> loggingPacketSent logging $
+    Just pkts -> liftIO $ withLog ctx $ \logging -> loggingPacketSent logging $
       mconcat ["Packet is to be sent before receival of previous "
-              ,show $ length pkt'
+              ,show $ length pkts
               ," packets was acknowledged"]
-  n <- sendPacketDTLSImpl ctx pkt
-  liftIO $ putMVar (ctxRetransmitAcc ctx) (Just $ maybe n (++n) srctx)
+  sendPacketDTLSImpl ctx pkt
+  liftIO $ putMVar (ctxRetransmitAcc ctx) (Just $ maybe [pkt] (++[pkt]) mprev)
 
 resendPacketDTLS :: Context -> IO ()
 resendPacketDTLS ctx = do
@@ -205,22 +206,21 @@ resendPacketDTLS ctx = do
     Just pkt -> do
       withLog ctx $ \logging -> loggingPacketSent logging
         $ "Retransmitting packets in qty of "++(show $ length pkt)
-      forM_ pkt $ sendBytes ctx
+      forM_ pkt $ sendPacketDTLSImpl ctx
 
 resetRetransmitAcc :: Context -> IO ()
 resetRetransmitAcc ctx = do
   _ <- takeMVar (ctxRetransmitAcc ctx)
   putMVar (ctxRetransmitAcc ctx) Nothing
 
-sendPacketDTLSImpl :: MonadIO m => Context -> Packet -> m [ByteString]
+sendPacketDTLSImpl :: MonadIO m => Context -> Packet -> m ()
 sendPacketDTLSImpl ctx pkt = do
     edataToSend <- liftIO $ do
                         withLog ctx $ \logging -> loggingPacketSent logging (show pkt)
                         writePacketDTLS ctx pkt
     case edataToSend of
         Left err         -> throwCore err
-        Right dataToSend -> do forM_ dataToSend $ sendBytes ctx
-                               return dataToSend
+        Right dataToSend -> forM_ dataToSend $ sendBytes ctx
 
 sendPacket :: MonadIO m => Context -> Packet -> m ()
 sendPacket ctx pkt =

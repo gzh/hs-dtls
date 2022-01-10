@@ -8,7 +8,7 @@
 -- the Sending module contains calls related to marshalling packets according
 -- to the TLS state
 --
-module Network.TLS.Sending (writePacket, writePacketDTLS) where
+module Network.TLS.Sending (writePacket, writePacketDTLS, mkDtlsHs) where
 
 import Control.Monad.State.Strict
 import Control.Concurrent.MVar
@@ -85,13 +85,18 @@ writePacket ctx pkt = do
 engageAndEncode :: RecordM (Record Plaintext) -> RecordM ByteString
 engageAndEncode record = record >>= engageRecord >>= encodeRecord
 
-writePacketDTLS :: Context -> Packet -> IO (Either TLSError [ByteString])
-writePacketDTLS ctx (Handshake hss') = do
-    let mtu = ctxMTU ctx
+mkDtlsHs :: Context -> Packet -> IO Packet
+mkDtlsHs ctx (Handshake hss') = do
     msgSeq <- case hss' of
                 [HelloVerifyRequest {}] -> return [0]
                 _ -> ctxNextHsMsgSeq ctx (fromIntegral $ length hss')
     let hss = zipWith DtlsHandshake msgSeq hss'
+    return $ Handshake hss
+mkDtlsHs _ pkt = return pkt
+
+writePacketDTLS :: Context -> Packet -> IO (Either TLSError [ByteString])
+writePacketDTLS ctx (Handshake hss) = do
+    let mtu = ctxMTU ctx
     let updateCtx hs = do
         case hs of
             Finished fdata -> usingState_ ctx $ updateVerifiedData ClientRole fdata

@@ -110,7 +110,6 @@ data Context = Context
                                            -- after the first packet received.
     , ctxTxState          :: MVar RecordState -- ^ current tx state
     , ctxRxState          :: MVar RecordState -- ^ current rx state
-    , ctxRetransmitAcc    :: MVar (Maybe [ByteString])
     , ctxHandshake        :: MVar (Maybe HandshakeState) -- ^ optional handshake state
     , ctxDoHandshake      :: Context -> IO ()
     , ctxDoHandshakeWith  :: Context -> Handshake -> IO ()
@@ -129,6 +128,7 @@ data Context = Context
     , ctxNextHsMsgSeq     :: Word16 -> IO [Word16] -- generator for next outgoing handshake messages' DTLS sequence numbers
     , ctxUpdateHsMsgSeq   :: Word16 -> IO Bool -- guard for incoming handshake messages' DTLS sequence numbers
     , ctxUpdateRecMsgSeq  :: Word64 -> IO Bool
+    , ctxRetransmitAcc    :: MVar (Maybe [Packet])
     }
 
 data Established = NotEstablished
