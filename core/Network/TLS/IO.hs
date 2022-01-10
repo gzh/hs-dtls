@@ -161,7 +161,7 @@ recvPacket ctx = do
     Right p -> return p
 
 resendLoop :: Context -> IO ()
-resendLoop ctx = go $ map (\n -> 200000 * (min 10 $ 1 `shiftL` n)) [0..9]
+resendLoop ctx = go $ map (\n -> 400000 * (min 3 $ 1 `shiftL` n)) [0..9]
   where go [] = return ()
         go (t:ts) = do threadDelay t
                        resendPacketDTLS ctx
