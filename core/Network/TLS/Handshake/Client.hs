@@ -77,7 +77,7 @@ handshakeClient' cparams ctx groups mcrand = do
     sentExtensions <- sendClientHello mcrand
     recvServerHello sentExtensions
     ver <- usingState_ ctx getVersion
-    helloCookie <- usingState_ ctx getHelloCookie 
+    helloCookie <- usingState_ ctx getHelloCookie
     if isDTLS ver && Nothing /= helloCookie
       then handshakeClient' cparams ctx groups mcrand -- just restart with requested hello cookie set
       else do
@@ -686,9 +686,9 @@ processCertificate cparams ctx (Certificates certs) = do
                                                               certs
         -- also verify that the certificate optional key usage is compatible
         -- with the intended key-exchange.  This check is not delegated to
-        -- x509-validation 'checkLeafKeyUsage' because it depends on negotiated
+        -- crypton-x509-validation 'checkLeafKeyUsage' because it depends on negotiated
         -- cipher, which is not available from onServerCertificate parameters.
-        -- Additionally, with only one shared ValidationCache, x509-validation
+        -- Additionally, with only one shared ValidationCache, crypton-x509-validation
         -- would cache validation result based on a key usage and reuse it with
         -- another key usage.
         checkLeafCertificateKeyUsage = do

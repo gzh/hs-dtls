@@ -10,7 +10,7 @@ Synopsis:            Set of programs for TLS testing and debugging
 Build-Type:          Simple
 Category:            Network
 stability:           experimental
-Cabal-Version:       >=1.6
+Cabal-Version:       >=1.10
 Homepage:            http://github.com/vincenthz/hs-tls
 
 Executable           TestClient
@@ -19,7 +19,7 @@ Executable           TestClient
   Build-Depends:     base >= 4 && < 5
                    , network
                    , bytestring
-                   , x509-system >= 1.0
+                   , crypton-x509-system >= 1.0
                    , data-default-class
                    , directory
                    , random

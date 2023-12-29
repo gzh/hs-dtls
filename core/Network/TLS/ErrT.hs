@@ -10,13 +10,11 @@
 module Network.TLS.ErrT
     ( runErrT
     , ErrT
-    , Error(..)
     , MonadError(..)
     ) where
 
 #if MIN_VERSION_mtl(2,2,1)
 import Control.Monad.Except
-import Control.Monad.Error.Class (Error(..))
 runErrT :: ExceptT e m a -> m (Either e a)
 runErrT = runExceptT
 type ErrT = ExceptT
