@@ -1,3 +1,9 @@
+What is this repo
+-----------------
+This is not a vanilla `hs-tls`. This is `hs-tls`, forked circa 2020, and then support for DTLS added to it. 
+Result of this effort has never been merged into hs-tls, however hs package in this fork has been renamed 
+so it can be used along with vanilla `hs-tls` in the same project.
+
 haskell TLS
 ===========
 
