@@ -28,7 +28,7 @@ module Network.TLS.Packet
 
     -- * marshall functions for handshake messages
     , decodeHandshakeRecord
-    , decodeHandshakeRecordsDTLS
+    , decodeHandshakeFragmentsDTLS
     , decodeHandshake
     , decodeDeprecatedHandshake
     , encodeHandshake
@@ -74,6 +74,7 @@ import Network.TLS.Imports
 import Network.TLS.Struct
 import Network.TLS.Wire
 import Network.TLS.Cap
+import Network.TLS.Handshake.Reassembly (HandshakeFragment(..))
 import Data.ASN1.Types (fromASN1, toASN1)
 import Data.ASN1.Encoding (decodeASN1', encodeASN1')
 import Data.ASN1.BinaryEncoding (DER(..))
@@ -199,52 +200,24 @@ decodeHandshakeRecord = runGet "handshake-record" $ do
     return (ty, id, content)
 
 
--- DTLS-related context for handshake message reassembly.
-data HandshakeReassembleCtx = HandshakeReassembleCtx {
-    hrcHandshakeType :: HandshakeType,
-    hrcMessageSeq :: Word16,
-    hrcLengthExpected :: Int,
-    hrcReadyData :: ByteString }
-
--- Assumes the records on the input are already properly reordered.
-decodeHandshakeRecordsDTLS :: ByteString -> GetResult (HandshakeType, Handshake -> Handshake, ByteString)
-decodeHandshakeRecordsDTLS =
-  let getFragment = do
-        ty      <- getHandshakeType
-        len     <- getWord24
-        msgSeq  <- getWord16
-        fragOff <- getWord24
-        fragLen <- getWord24
-        content <- getBytes fragLen
-        return (ty, len, msgSeq, fragOff, fragLen, content)
-      processFragment mhrc = do
-        (ty, len, msgSeq, fragOff, fragLen, content) <- getFragment
-        case mhrc of
-          Nothing -> if 0 == fragOff
-                     then if len == fragLen
-                          then return (ty, DtlsHandshake msgSeq, content)
-                          else processFragment $ Just $ HandshakeReassembleCtx ty msgSeq len content
-                     else fail $ "Got a fragment of non-zero offset. "++
-                          "Reassemble expects fragments to be reordered at record layer"
-          Just hrc -> do
-            let ready = hrcReadyData hrc
-            when (hrcHandshakeType hrc /= ty) $
-              fail "Handshake type does not match in a subsequent handshake fragment"
-            when (hrcLengthExpected hrc /= len) $
-              fail "Expected message length does not match in a subsequent handshake"
-            when (hrcMessageSeq hrc /= msgSeq) $
-              fail "Handshake message sequence number does not match in subsequent fragment"
-            when (fragOff > B.length ready) $
-              fail "Some handshake fragment is missing, reassemly not possible"
-            when (fragOff < B.length ready) $
-              fail "Handshake fragment overlaps with previously received data"
-            when (fragOff+fragLen > hrcLengthExpected hrc) $
-              fail "Excessive length of handshake fragment"
-            let hrc' = hrc { hrcReadyData = ready `mappend` content }
-            if B.length (hrcReadyData hrc') < hrcLengthExpected hrc'
-              then processFragment $ Just hrc'
-              else return (hrcHandshakeType hrc', DtlsHandshake msgSeq, hrcReadyData hrc')
-  in runGet "handshake-record-dtls" $ processFragment Nothing
+-- | Split the content of a DTLS handshake record into handshake fragments.
+-- A fragment never spans records (RFC 6347 4.2.3), so the record content
+-- has to be consumed entirely. Reassembly is done by
+-- "Network.TLS.Handshake.Reassembly".
+decodeHandshakeFragmentsDTLS :: ByteString -> Either TLSError [HandshakeFragment]
+decodeHandshakeFragmentsDTLS = runGetErr "handshake-record-dtls" getFragments
+  where getFragments = do
+            r <- remaining
+            if r == 0
+                then return []
+                else (:) <$> getFragment <*> getFragments
+        getFragment = do
+            ty      <- getHandshakeType
+            len     <- getWord24
+            msgSeq  <- getWord16
+            fragOff <- getWord24
+            content <- getOpaque24
+            return $ HandshakeFragment ty len msgSeq fragOff content
 
 
 decodeHandshake :: CurrentParams -> HandshakeType -> ByteString -> Either TLSError Handshake

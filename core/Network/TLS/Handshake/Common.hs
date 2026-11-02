@@ -136,7 +136,10 @@ onRecvStateHandshake _ _ _   = unexpected "spurious handshake" Nothing
 
 runRecvState :: Context -> RecvState IO -> IO ()
 runRecvState _    RecvStateDone    = return ()
-runRecvState ctx (RecvStateNext f) = recvPacket ctx >>= either throwCore f >>= runRecvState ctx
+runRecvState ctx st@(RecvStateNext f) = recvPacket ctx >>= either throwCore next >>= runRecvState ctx
+  -- a DTLS record may carry no complete handshake message yet
+  where next (Handshake []) = return st
+        next pkt            = f pkt
 runRecvState ctx iniState          = recvPacketHandshake ctx >>= onRecvStateHandshake ctx iniState >>= runRecvState ctx
 
 getSessionData :: Context -> IO (Maybe SessionData)

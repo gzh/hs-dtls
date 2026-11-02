@@ -77,6 +77,8 @@ import Network.TLS.Types (Role(..))
 import Network.TLS.Handshake (handshakeClient, handshakeClientWith, handshakeServer, handshakeServerWith)
 import Network.TLS.X509
 import Network.TLS.RNG
+import Network.TLS.Handshake.Reassembly (newHandshakeReassembly)
+import Network.TLS.Record.ReplayWindow (newReplayWindow)
 
 import Control.Concurrent.MVar
 import Control.Monad.State.Strict
@@ -163,8 +165,8 @@ contextNew backend params = liftIO $ do
     lockState <- newMVar ()
     (cookieGen, cookieVerify) <- makeHelloCookieMethods
     hsMsgSeqOut <- newIORef 1
-    hsMsgSeqIn <- newIORef 1
-    recMsgSeqIn <- newIORef 0
+    hsReassembly <- newIORef $ newHandshakeReassembly 1
+    replayWindow <- newIORef newReplayWindow
 
     return Context
             { ctxConnection   = getBackend backend
@@ -193,14 +195,8 @@ contextNew backend params = liftIO $ do
             , ctxHelloCookieVerify= cookieVerify
             , ctxNextHsMsgSeq     = \count -> atomicModifyIORef' hsMsgSeqOut
                                               (\sn -> (sn+count, [sn..sn+count-1]))
-            , ctxUpdateHsMsgSeq   = \msgSeq -> atomicModifyIORef' hsMsgSeqIn
-                                               (\sn -> if msgSeq >= sn
-                                                       then (msgSeq+1, True)
-                                                       else (sn, False))
-            , ctxUpdateRecMsgSeq  = \recSeq -> atomicModifyIORef' recMsgSeqIn
-                                               (\sn -> if recSeq >= sn
-                                                       then (recSeq+1, True)
-                                                       else (sn, False))
+            , ctxHandshakeReassembly = hsReassembly
+            , ctxReplayWindow     = replayWindow
             }
 
 -- | create a new context on an handle.

@@ -29,7 +29,9 @@ import Network.TLS.Cipher
 import Network.TLS.Util
 import Network.TLS.Imports
 
-import qualified Data.ByteString as BS
+import Network.TLS.Handshake.Reassembly (insertFragments)
+import Network.TLS.Hooks
+import Data.IORef
 
 processPacket :: Context -> Record Plaintext -> IO (Either TLSError Packet)
 
@@ -43,9 +45,12 @@ processPacket ctx (Record ProtocolType_ChangeCipherSpec _ _ fragment) =
         Right _  -> do switchRxEncryption ctx
                        return $ Right ChangeCipherSpec
 
+processPacket ctx (Record ProtocolType_Handshake ver _ fragment)
+    | isDTLS ver = processHandshakeDTLS ctx ver fragment
+
 processPacket ctx (Record ProtocolType_Handshake ver _ fragment) = do
     keyxchg <- getHState ctx >>= \hs -> return (hs >>= hstPendingCipher >>= Just . cipherKeyExchange)
-    ehss <- usingState ctx $ do
+    usingState ctx $ do
         let currentParams = CurrentParams
                             { cParamsVersion     = ver
                             , cParamsKeyXchgType = keyxchg
@@ -54,19 +59,9 @@ processPacket ctx (Record ProtocolType_Handshake ver _ fragment) = do
         mCont <- gets stHandshakeRecordCont
         modify (\st -> st { stHandshakeRecordCont = Nothing })
         hss   <- parseMany currentParams mCont (fragmentGetBytes fragment)
-        return hss
-    case ehss of
-      Left err -> return $ Left err
-      Right (hss@[DtlsHandshake _ (ClientHello _ _ _ cookie _ _ _ _)]) ->
-        if cookie == HelloCookie BS.empty
-        then return $ Right $ Handshake hss
-        else (Right . Handshake . catMaybes) <$> mapM (replayGuard ctx) hss
-      Right hss -> (Right . Handshake . catMaybes) <$> mapM (replayGuard ctx) hss
-  where decodeHandshakeRecordX = if isDTLS ver
-                                 then decodeHandshakeRecordsDTLS
-                                 else decodeHandshakeRecord
-        parseMany currentParams mCont bs =
-            case fromMaybe decodeHandshakeRecordX mCont bs of
+        return $ Handshake hss
+  where parseMany currentParams mCont bs =
+            case fromMaybe decodeHandshakeRecord mCont bs of
                 GotError err                -> throwError err
                 GotPartial cont             -> modify (\st -> st { stHandshakeRecordCont = Just cont }) >> return []
                 GotSuccess (ty,decorate,content) ->
@@ -88,8 +83,27 @@ switchRxEncryption ctx =
                                                                    epoch = stSeqNumber rxprev
                                                                in rx { stSeqNumber = nextEpoch epoch })
 
-replayGuard :: Context -> Handshake -> IO (Maybe Handshake)
-replayGuard ctx hs@(DtlsHandshake ind _) = do
-  pass <- ctxUpdateHsMsgSeq ctx ind
-  if pass then return $ Just hs else return Nothing
-replayGuard _ hs = return $ Just hs
+-- | DTLS handshake records carry fragments which may arrive in any order,
+-- duplicated or overlapping. They are handed to the reassembly buffer,
+-- which returns the messages which became ready, in message_seq order
+-- (possibly none). Fragments which cannot be used are discarded rather
+-- than failing the association (RFC 6347 4.1.2.7): the peer will
+-- retransmit.
+processHandshakeDTLS :: Context -> Version -> Fragment Plaintext -> IO (Either TLSError Packet)
+processHandshakeDTLS ctx ver fragment =
+    case decodeHandshakeFragmentsDTLS (fragmentGetBytes fragment) of
+        Left err -> do
+            logDiscard $ "undecodable handshake record: " ++ show err
+            return $ Right $ Handshake []
+        Right frags -> do
+            (msgs, discarded) <- atomicModifyIORef' (ctxHandshakeReassembly ctx) (insertFragments frags)
+            mapM_ logDiscard discarded
+            keyxchg <- getHState ctx >>= \hs -> return (hs >>= hstPendingCipher >>= Just . cipherKeyExchange)
+            let currentParams = CurrentParams
+                                { cParamsVersion     = ver
+                                , cParamsKeyXchgType = keyxchg
+                                }
+                decode (ty, msgSeq, content) = DtlsHandshake msgSeq <$> decodeHandshake currentParams ty content
+            return $ Handshake <$> mapM decode msgs
+  where logDiscard reason = withLog ctx $ \logging ->
+            loggingPacketRecv logging $ "Discarded handshake fragment: " ++ reason

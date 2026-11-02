@@ -47,6 +47,7 @@ Library
                    , transformers
                    , cereal >= 0.5.3
                    , bytestring
+                   , containers
                    , data-default-class
                    -- crypto related
                    , memory >= 0.14.6
@@ -95,6 +96,7 @@ Library
                      Network.TLS.Handshake.Server
                      Network.TLS.Handshake.Process
                      Network.TLS.Handshake.Random
+                     Network.TLS.Handshake.Reassembly
                      Network.TLS.Handshake.Signature
                      Network.TLS.Handshake.State
                      Network.TLS.Handshake.State13
@@ -115,6 +117,7 @@ Library
                      Network.TLS.Record.Disengage
                      Network.TLS.Record.Disengage13
                      Network.TLS.Record.State
+                     Network.TLS.Record.ReplayWindow
                      Network.TLS.RNG
                      Network.TLS.State
                      Network.TLS.Session
@@ -139,6 +142,7 @@ Test-Suite test-tls
   other-modules:     Certificate
                      Ciphers
                      Connection
+                     DTLS
                      Marshalling
                      PipeChan
                      PubKey

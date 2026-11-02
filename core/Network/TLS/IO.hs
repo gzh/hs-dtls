@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiWayIf #-}
 -- |
 -- Module      : Network.TLS.IO
 -- License     : BSD-style
@@ -33,9 +34,11 @@ import Network.TLS.Receiving
 import Network.TLS.Imports
 import Network.TLS.Receiving13
 import Network.TLS.State
+import Network.TLS.Record.ReplayWindow (isReplayed, markReceived)
 import qualified Data.ByteString as B
 
 import Data.IORef
+import Data.Either (isRight)
 import Control.Monad.Reader
 import Control.Exception (finally, throwIO, onException)
 import Control.Concurrent
@@ -111,9 +114,29 @@ recvRecord compatSSLv2 ctx
 #endif
               maximumSizeExceeded = Error_Protocol ("record exceeding maximum size", True, RecordOverflow)
               getRecord :: Header -> ByteString -> IO (Either TLSError (Record Plaintext))
-              getRecord header content = do
+              getRecord header@(Header _ ver sn _) content = do
                     withLog ctx $ \logging -> loggingIORecv logging header content
-                    runRxState ctx $ disengageRecord $ rawToRecord header (fragmentCiphertext content)
+                    if isDTLS ver then getRecordDTLS else disengage
+                where
+                  disengage = runRxState ctx $ disengageRecord $ rawToRecord header (fragmentCiphertext content)
+                  -- Records may be lost, duplicated or reordered (RFC 6347 4.1.2.6).
+                  -- Records of another epoch can't be deciphered with the current
+                  -- state, and replayed ones must not be processed again; both are
+                  -- silently discarded, and the next record is read instead.
+                  getRecordDTLS = do
+                    rxEpoch <- epochOf . stSeqNumber <$> readMVar (ctxRxState ctx)
+                    replayed <- isReplayed sn <$> readIORef (ctxReplayWindow ctx)
+                    if | epochOf sn /= rxEpoch -> discard $ "epoch " ++ show (epochOf sn) ++ " while expecting " ++ show rxEpoch
+                       | replayed              -> discard "duplicate or too old sequence number"
+                       | otherwise             -> do
+                           erecord <- disengage
+                           when (isRight erecord) $ atomicModifyIORef' (ctxReplayWindow ctx) (\w -> (markReceived sn w, ()))
+                           return erecord
+                  discard reason = do
+                    withLog ctx $ \logging -> loggingPacketRecv logging $
+                      "Dropped record " ++ show header ++ ": " ++ reason
+                    recvRecord compatSSLv2 ctx
+                  epochOf = (`shiftR` 48)
 
 isCCS :: Record a -> Bool
 isCCS (Record ProtocolType_ChangeCipherSpec _ _ _) = True
@@ -129,29 +152,22 @@ recvPacketImpl ctx = liftIO $ do
     case erecord of
       Left err     -> return $ Left err
       Right record -> do
-        ordered <- ctxUpdateRecMsgSeq ctx $ getSequenceNumber record
-        if ordered
-          then do hrr <- usingState_ ctx getTLS13HRR
-                  if hrr && isCCS record
-                    then recvPacketImpl ctx
-                    else do
-                    pktRecv <- processPacket ctx record
-                    pkt <- case pktRecv of
-                             Right (Handshake hss) ->
-                               ctxWithHooks ctx $ \hooks ->
-                               Right . Handshake <$> mapM (hookRecvHandshake hooks) hss
-                             _ -> return pktRecv
-                    case pkt of
-                      Right p -> withLog ctx $ \logging -> loggingPacketRecv logging $ show p
-                      _ -> return ()
-                    when compatSSLv2 $ ctxDisableSSLv2ClientHello ctx
-                    resetRetransmitAcc ctx
-                    return pkt
+        hrr <- usingState_ ctx getTLS13HRR
+        if hrr && isCCS record
+          then recvPacketImpl ctx
           else do
-          withLog ctx $ \logging -> loggingPacketRecv logging $
-            mconcat ["Dropped record because of its sequence number: "
-                    ,show record]
-          recvPacketImpl ctx
+          pktRecv <- processPacket ctx record
+          pkt <- case pktRecv of
+                   Right (Handshake hss) ->
+                     ctxWithHooks ctx $ \hooks ->
+                     Right . Handshake <$> mapM (hookRecvHandshake hooks) hss
+                   _ -> return pktRecv
+          case pkt of
+            Right p -> withLog ctx $ \logging -> loggingPacketRecv logging $ show p
+            _ -> return ()
+          when compatSSLv2 $ ctxDisableSSLv2ClientHello ctx
+          resetRetransmitAcc ctx
+          return pkt
 
 recvPacket :: MonadIO m => Context -> m (Either TLSError Packet)
 recvPacket ctx = do

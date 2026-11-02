@@ -71,6 +71,8 @@ import Network.TLS.Hooks
 import Network.TLS.Record.State
 import Network.TLS.Parameters
 import Network.TLS.Measurement
+import Network.TLS.Handshake.Reassembly (HandshakeReassembly)
+import Network.TLS.Record.ReplayWindow (ReplayWindow)
 import Network.TLS.Imports
 import Network.TLS.Record
 import qualified Data.ByteString as B
@@ -126,8 +128,8 @@ data Context = Context
     , ctxHelloCookieGen   :: IO HelloCookie
     , ctxHelloCookieVerify:: HelloCookie -> IO Bool
     , ctxNextHsMsgSeq     :: Word16 -> IO [Word16] -- generator for next outgoing handshake messages' DTLS sequence numbers
-    , ctxUpdateHsMsgSeq   :: Word16 -> IO Bool -- guard for incoming handshake messages' DTLS sequence numbers
-    , ctxUpdateRecMsgSeq  :: Word64 -> IO Bool
+    , ctxHandshakeReassembly :: IORef HandshakeReassembly -- incoming handshake fragments and message ordering
+    , ctxReplayWindow     :: IORef ReplayWindow -- anti-replay window for incoming records
     , ctxRetransmitAcc    :: MVar (Maybe [Packet])
     }
 

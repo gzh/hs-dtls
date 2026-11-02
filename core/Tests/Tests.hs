@@ -9,6 +9,7 @@ import Connection
 import Marshalling
 import Ciphers
 import PubKey
+import DTLS
 
 import Data.Foldable (traverse_)
 import Data.Maybe
@@ -783,6 +784,7 @@ main = defaultMain $ testGroup "tls"
     , tests_ciphers
     , tests_handshake
     , tests_thread_safety
+    , tests_dtls
     ]
   where -- lowlevel tests to check the packet marshalling.
         tests_marshalling = testGroup "Marshalling"

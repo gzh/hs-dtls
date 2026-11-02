@@ -126,6 +126,9 @@ recvData1 ctx = do
             handshakeWith ctx ch >> recvData1 ctx
         process (Handshake [hr@HelloRequest]) =
             handshakeWith ctx hr >> recvData1 ctx
+        -- a DTLS record with no complete handshake message to process
+        -- (e.g. a retransmission of an already processed one)
+        process (Handshake []) = recvData1 ctx
 
         process (Alert [(AlertLevel_Warning, CloseNotify)]) = tryBye ctx >> setEOF ctx >> return B.empty
         process (Alert [(AlertLevel_Fatal, desc)]) = do
