@@ -16,10 +16,13 @@
 --
 -- Problems with individual fragments are never fatal: such fragments are
 -- discarded (the reason is reported back for logging) and the peer's
--- retransmission is expected to repair the flight.
+-- retransmission is expected to repair the flight. Fragments of messages
+-- which have already been processed are reported as stale: they show that
+-- the peer is retransmitting, i.e. that our response may have been lost.
 --
 module Network.TLS.Handshake.Reassembly
     ( HandshakeFragment(..)
+    , FragmentOutcome(..)
     , HandshakeReassembly
     , newHandshakeReassembly
     , insertFragment
@@ -42,6 +45,13 @@ data HandshakeFragment = HandshakeFragment
     , hfOffset     :: !Int    -- ^ fragment offset within the message
     , hfData       :: !ByteString
     } deriving (Show, Eq)
+
+-- | What became of a fragment fed to the reassembly.
+data FragmentOutcome
+    = FragmentProgress         -- ^ new data from the peer's current or next flight
+    | FragmentStale String     -- ^ part of a message already processed
+    | FragmentDiscarded String -- ^ unusable (reason given)
+    deriving (Show, Eq)
 
 data PartialMessage = PartialMessage
     { pmType   :: !HandshakeType
@@ -71,24 +81,24 @@ newHandshakeReassembly next = HandshakeReassembly next False M.empty M.empty
 -- | Feed several fragments (e.g. all fragments of one record).
 insertFragments :: [HandshakeFragment]
                 -> HandshakeReassembly
-                -> (HandshakeReassembly, ([(HandshakeType, Word16, ByteString)], [String]))
+                -> (HandshakeReassembly, ([(HandshakeType, Word16, ByteString)], [FragmentOutcome]))
 insertFragments frags st0 = go st0 [] [] frags
-  where go st msgs drops []     = (st, (concat (reverse msgs), reverse drops))
-        go st msgs drops (f:fs) =
-            let (st', ms, md) = insertFragment f st
-            in go st' (ms:msgs) (maybe drops (:drops) md) fs
+  where go st msgs outcomes []     = (st, (concat (reverse msgs), reverse outcomes))
+        go st msgs outcomes (f:fs) =
+            let (st', ms, o) = insertFragment f st
+            in go st' (ms:msgs) (o:outcomes) fs
 
 -- | Feed one fragment. Returns the new state, the messages which are now
--- ready to be processed (type, message_seq, body), in order, and the
--- reason for discarding the fragment, if it was discarded.
+-- ready to be processed (type, message_seq, body), in order, and what
+-- became of the fragment.
 insertFragment :: HandshakeFragment
                -> HandshakeReassembly
-               -> (HandshakeReassembly, [(HandshakeType, Word16, ByteString)], Maybe String)
+               -> (HandshakeReassembly, [(HandshakeType, Word16, ByteString)], FragmentOutcome)
 insertFragment f st
     | hfOffset f + B.length (hfData f) > hfLength f =
         discard "fragment exceeds declared message length"
-    | msgSeq < hrNextSeq st && not (isStatelessHelloType ty) =
-        discard "fragment of an already processed message"
+    | stale && not (isStatelessHelloType ty) =
+        (st, [], FragmentStale $ "fragment of an already processed message: " ++ describe f)
     | M.member msgSeq (hrComplete st) =
         discard "fragment of an already reassembled message"
     | otherwise =
@@ -107,7 +117,13 @@ insertFragment f st
     off    = hfOffset f
     end    = off + B.length (hfData f)
 
-    discard reason = (st, [], Just $ reason ++ ": " ++ describe f)
+    -- earlier ClientHello fragments are still buffered, in case it turns out
+    -- to be a ClientHello without cookie
+    stale  = msgSeq < hrNextSeq st
+
+    discard reason
+        | stale     = (st, [], FragmentStale $ reason ++ ": " ++ describe f)
+        | otherwise = (st, [], FragmentDiscarded $ reason ++ ": " ++ describe f)
 
     addPiece pm
         | isComplete pm' =
@@ -117,7 +133,9 @@ insertFragment f st
         | covered = discard "duplicate fragment"
         | bufferedBytes st + B.length (hfData f) > maxBufferedBytes =
             discard "too many handshake bytes buffered"
-        | otherwise = (st { hrPartial = M.insert msgSeq pm' (hrPartial st) }, [], Nothing)
+        | stale     = (st { hrPartial = M.insert msgSeq pm' (hrPartial st) }, []
+                      , FragmentStale $ "fragment of an earlier ClientHello: " ++ describe f)
+        | otherwise = (st { hrPartial = M.insert msgSeq pm' (hrPartial st) }, [], FragmentProgress)
       where covered = coveredUpTo off (pmPieces pm) >= end
             pm' | covered   = pm
                 | otherwise = pm { pmPieces = insertBy (comparing fst) (off, hfData f) (pmPieces pm) }
@@ -126,11 +144,11 @@ insertFragment f st
         -- ClientHello without cookie and HelloVerifyRequest are processed
         -- out of sequence: they belong to the stateless cookie exchange
         -- (RFC 6347 4.2.1) and may be retransmitted with any message_seq.
-        | isStatelessHello ty body = (st', [(ty, msgSeq, body)], Nothing)
-        | msgSeq < hrNextSeq st'   = (st', [], Just $ "stale message: " ++ describe f)
+        | isStatelessHello ty body = (st', [(ty, msgSeq, body)], FragmentProgress)
+        | stale                    = (st', [], FragmentStale $ "already processed message: " ++ describe f)
         | otherwise =
             let (st'', msgs) = drain st' { hrComplete = M.insert msgSeq (ty, body) (hrComplete st') }
-            in (st'', msgs, Nothing)
+            in (st'', msgs, FragmentProgress)
 
 -- | Deliver queued complete messages which are next in sequence.
 drain :: HandshakeReassembly -> (HandshakeReassembly, [(HandshakeType, Word16, ByteString)])

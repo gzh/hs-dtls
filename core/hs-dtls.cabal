@@ -81,6 +81,7 @@ Library
                      Network.TLS.Context
                      Network.TLS.Context.Internal
                      Network.TLS.Credentials
+                     Network.TLS.Flight
                      Network.TLS.Backend
                      Network.TLS.Crypto
                      Network.TLS.Crypto.DH

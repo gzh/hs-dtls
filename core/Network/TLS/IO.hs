@@ -11,6 +11,7 @@
 module Network.TLS.IO
     ( checkValid
     , sendPacket
+    , flushFlight
     , sendPacket13
     , recvPacket
     , recvPacket13
@@ -35,6 +36,7 @@ import Network.TLS.Imports
 import Network.TLS.Receiving13
 import Network.TLS.State
 import Network.TLS.Record.ReplayWindow (isReplayed, markReceived)
+import Network.TLS.Flight
 import qualified Data.ByteString as B
 
 import Data.IORef
@@ -123,12 +125,19 @@ recvRecord compatSSLv2 ctx
                   -- Records of another epoch can't be deciphered with the current
                   -- state, and replayed ones must not be processed again; both are
                   -- silently discarded, and the next record is read instead.
+                  -- Records of a previous epoch and replayed ones also tell that
+                  -- the peer is retransmitting, so our last flight may have been lost.
                   getRecordDTLS = do
                     rxEpoch <- epochOf . stSeqNumber <$> readMVar (ctxRxState ctx)
                     replayed <- isReplayed sn <$> readIORef (ctxReplayWindow ctx)
-                    if | epochOf sn /= rxEpoch -> discard $ "epoch " ++ show (epochOf sn) ++ " while expecting " ++ show rxEpoch
-                       | replayed              -> discard "duplicate or too old sequence number"
-                       | otherwise             -> do
+                    if | epochOf sn > rxEpoch -> discard $ "epoch " ++ show (epochOf sn) ++ " while expecting " ++ show rxEpoch
+                       | epochOf sn < rxEpoch -> do
+                           retransmitFlightOnPeerRetransmission ctx
+                           discard $ "epoch " ++ show (epochOf sn) ++ " while expecting " ++ show rxEpoch
+                       | replayed -> do
+                           retransmitFlightOnPeerRetransmission ctx
+                           discard "duplicate or too old sequence number"
+                       | otherwise -> do
                            erecord <- disengage
                            when (isRight erecord) $ atomicModifyIORef' (ctxReplayWindow ctx) (\w -> (markReceived sn w, ()))
                            return erecord
@@ -166,21 +175,34 @@ recvPacketImpl ctx = liftIO $ do
             Right p -> withLog ctx $ \logging -> loggingPacketRecv logging $ show p
             _ -> return ()
           when compatSSLv2 $ ctxDisableSSLv2ClientHello ctx
-          resetRetransmitAcc ctx
+          -- (DTLS) anything but handshake data means the peer proceeded past
+          -- our last flight; handshake fragments are sorted out in processPacket
+          case pkt of
+            Right (Handshake _) -> return ()
+            Right _ | ctxIsDTLS ctx -> flightAcknowledged ctx
+            _ -> return ()
           return pkt
 
+-- | Receive a packet. During a DTLS handshake the last flight is
+-- retransmitted while waiting, and the handshake times out eventually.
 recvPacket :: MonadIO m => Context -> m (Either TLSError Packet)
-recvPacket ctx = do
-  er <- liftIO $ race (resendLoop ctx) (recvPacketImpl ctx)
-  case er of
-    Left _ -> return $ Left $ Error_Misc "Timeout on receiving packet"
-    Right p -> return p
+recvPacket ctx = liftIO $ do
+  -- (DTLS) our flight is complete when we're waiting for the peer
+  when (ctxIsDTLS ctx) $ flushFlight ctx
+  established <- ctxEstablished ctx
+  if ctxIsDTLS ctx && established == NotEstablished
+    then do
+      er <- race (resendLoop ctx) (recvPacketImpl ctx)
+      case er of
+        Left _ -> return $ Left $ Error_Misc "Timeout on receiving packet"
+        Right p -> return p
+    else recvPacketImpl ctx
 
 resendLoop :: Context -> IO ()
 resendLoop ctx = go $ map (\n -> 400000 * (min 3 $ 1 `shiftL` n)) [0..9]
   where go [] = return ()
         go (t:ts) = do threadDelay t
-                       resendPacketDTLS ctx
+                       retransmitFlight ctx
                        go ts
 
 -- | Send one packet to the context
@@ -201,42 +223,21 @@ sendPacketTLS ctx pkt = do
   where isNonNullAppData (AppData b) = not $ B.null b
         isNonNullAppData _           = False
 
-sendPacketDTLS :: MonadIO m => Context -> Packet -> m ()
+-- | Handshake and ChangeCipherSpec records are queued as part of the
+-- current flight, which is sent when complete (see "Network.TLS.Flight").
+-- Anything else is sent right away, after the queued records.
+sendPacketDTLS :: Context -> Packet -> IO ()
 sendPacketDTLS ctx pkt' = do
-  mprev <- liftIO $ takeMVar (ctxRetransmitAcc ctx)
-  pkt <- liftIO $ mkDtlsHs ctx pkt'
-  case mprev of
-    Nothing -> return ()
-    Just pkts -> liftIO $ withLog ctx $ \logging -> loggingPacketSent logging $
-      mconcat ["Packet is to be sent before receival of previous "
-              ,show $ length pkts
-              ," packets was acknowledged"]
-  sendPacketDTLSImpl ctx pkt
-  liftIO $ putMVar (ctxRetransmitAcc ctx) (Just $ maybe [pkt] (++[pkt]) mprev)
-
-resendPacketDTLS :: Context -> IO ()
-resendPacketDTLS ctx = do
-  srctx <- liftIO $ readMVar (ctxRetransmitAcc ctx)
-  case srctx of
-    Nothing -> return ()
-    Just pkt -> do
-      withLog ctx $ \logging -> loggingPacketSent logging
-        $ "Retransmitting packets in qty of "++(show $ length pkt)
-      forM_ pkt $ sendPacketDTLSImpl ctx
-
-resetRetransmitAcc :: Context -> IO ()
-resetRetransmitAcc ctx = do
-  _ <- takeMVar (ctxRetransmitAcc ctx)
-  putMVar (ctxRetransmitAcc ctx) Nothing
-
-sendPacketDTLSImpl :: MonadIO m => Context -> Packet -> m ()
-sendPacketDTLSImpl ctx pkt = do
-    edataToSend <- liftIO $ do
-                        withLog ctx $ \logging -> loggingPacketSent logging (show pkt)
-                        writePacketDTLS ctx pkt
-    case edataToSend of
-        Left err         -> throwCore err
-        Right dataToSend -> forM_ dataToSend $ sendBytes ctx
+    pkt <- mkDtlsHs ctx pkt'
+    withLog ctx $ \logging -> loggingPacketSent logging (show pkt)
+    records <- writePacketDTLS ctx pkt >>= either throwCore return
+    if isFlightPacket pkt
+        then queueFlightRecords ctx records
+        else do flushFlight ctx
+                mapM_ (sendBytes ctx) records
+  where isFlightPacket (Handshake _)    = True
+        isFlightPacket ChangeCipherSpec = True
+        isFlightPacket _                = False
 
 sendPacket :: MonadIO m => Context -> Packet -> m ()
 sendPacket ctx pkt =

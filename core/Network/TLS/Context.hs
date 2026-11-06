@@ -157,7 +157,7 @@ contextNew backend params = liftIO $ do
     hooks <- newIORef defaultHooks
     tx    <- newMVar newRecordState
     rx    <- newMVar newRecordState
-    srctx <- newMVar Nothing
+    flight <- newMVar emptyFlight
     hs    <- newMVar Nothing
     as    <- newIORef []
     lockWrite <- newMVar ()
@@ -175,7 +175,7 @@ contextNew backend params = liftIO $ do
             , ctxState        = stvar
             , ctxTxState      = tx
             , ctxRxState      = rx
-            , ctxRetransmitAcc= srctx
+            , ctxFlight       = flight
             , ctxHandshake    = hs
             , ctxDoHandshake  = doHandshake params
             , ctxDoHandshakeWith  = doHandshakeWith params

@@ -57,6 +57,8 @@ module Network.TLS.Context.Internal
     , getStateRNG
     , tls13orLater
     , ctxIsDTLS
+    , Flight(..)
+    , emptyFlight
     ) where
 
 import Network.TLS.Backend
@@ -130,8 +132,22 @@ data Context = Context
     , ctxNextHsMsgSeq     :: Word16 -> IO [Word16] -- generator for next outgoing handshake messages' DTLS sequence numbers
     , ctxHandshakeReassembly :: IORef HandshakeReassembly -- incoming handshake fragments and message ordering
     , ctxReplayWindow     :: IORef ReplayWindow -- anti-replay window for incoming records
-    , ctxRetransmitAcc    :: MVar (Maybe [Packet])
+    , ctxFlight           :: MVar Flight -- last flight of handshake records sent, for retransmission
     }
+
+-- | DTLS: the last flight of handshake records sent (RFC 6347 4.2.4).
+-- It is kept as the datagrams which were sent, so that retransmitting it
+-- doesn't go through the handshake state again.
+data Flight = Flight
+    { flightDatagrams :: [ByteString] -- ^ sent so far
+    , flightPending   :: [ByteString] -- ^ records queued, to be packed into datagrams
+    , flightAcked     :: !Bool   -- ^ the peer has been seen to proceed past this flight
+    , flightSentAt    :: !Double -- ^ monotonic time of the last (re)transmission, in seconds
+    }
+
+-- | No flight to retransmit.
+emptyFlight :: Flight
+emptyFlight = Flight [] [] True 0
 
 data Established = NotEstablished
                  | EarlyDataAllowed Int    -- remaining 0-RTT bytes allowed

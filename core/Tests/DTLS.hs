@@ -14,18 +14,21 @@ import Network.TLS.Extra.Cipher (ciphersuite_default_DTLS)
 import Network.TLS.Internal
     ( HandshakeType(..)
     , HandshakeFragment(..)
+    , FragmentOutcome(..)
     , newHandshakeReassembly
     , insertFragment
     , insertFragments
     , newReplayWindow
     , isReplayed
     , markReceived
+    , packDatagrams
     )
 
 import Connection (arbitraryRSACredentialWithUsage)
 
 import Control.Concurrent.Async
 import Control.Concurrent.Chan
+import Control.Concurrent.MVar
 import Control.Monad
 import qualified Control.Exception as E
 import Data.Default.Class
@@ -48,10 +51,15 @@ tests_dtls = testGroup "DTLS"
         [ testProperty "No record accepted twice" prop_replay_unique
         , testProperty "Reordered records accepted" prop_replay_reordered
         ]
+    , testProperty "Packing records into datagrams" prop_pack_datagrams
     , testGroup "Handshake over datagrams"
-        [ testProperty "In order" $ prop_handshake_dtls InOrder
-        , testProperty "Reordered handshake datagrams" $ prop_handshake_dtls SwapHandshakePairs
-        , testProperty "Duplicated datagrams" $ prop_handshake_dtls Duplicate
+        [ testProperty "In order" $ prop_handshake_dtls InOrder True
+        , testProperty "Reordered handshake datagrams" $ prop_handshake_dtls SwapHandshakePairs True
+        , testProperty "Duplicated datagrams" $ prop_handshake_dtls Duplicate True
+        , testProperty "ServerHelloDone lost" $ prop_handshake_dtls (LoseFirst serverHelloDone) True
+        , testProperty "Server's last flight lost" $ prop_handshake_dtls (LoseFirst serverLastFlight) True
+        , testProperty "Server's last flight lost, no application data" $
+            prop_handshake_dtls (LoseFirst serverLastFlight) False
         ]
     ]
 
@@ -116,7 +124,7 @@ prop_reassembly_reversed_client_hello = once $
         st0 = newHandshakeReassembly 1
         (st1, msgs1, d1) = insertFragment (frag 1175 1445) st0
         (_,   msgs2, d2) = insertFragment (frag 0 1175) st1
-    in (msgs1, d1, msgs2, d2) === ([], Nothing, [(HandshakeType_ClientHello, 1, body)], Nothing)
+    in (msgs1, d1, msgs2, d2) === ([], FragmentProgress, [(HandshakeType_ClientHello, 1, body)], FragmentProgress)
 
 prop_reassembly_discards :: Property
 prop_reassembly_discards = once $
@@ -135,9 +143,11 @@ prop_reassembly_discards = once $
         (st5, m5, d5) = insertFragment (frag HandshakeType_Certificate 100 5 10 50) st4
         -- completing piece
         (_,   m6, d6) = insertFragment (frag HandshakeType_Certificate 100 5 50 100) st5
-        isJust' = maybe False (const True)
+        kind (FragmentStale _)     = "stale"
+        kind (FragmentDiscarded _) = "discarded"
+        kind FragmentProgress      = "progress" :: String
     in conjoin [ null (m1 ++ m2 ++ m3 ++ m4 ++ m5) === True
-               , map isJust' [d1, d2, d3, d4, d5, d6] === [True, True, False, True, True, False]
+               , map kind [d1, d2, d3, d4, d5, d6] === ["stale", "discarded", "progress", "discarded", "discarded", "progress"]
                , m6 === [(HandshakeType_Certificate, 5, body)]
                ]
 
@@ -186,8 +196,52 @@ prop_replay_reordered = property $ do
 ----------------------------------------------------------------
 -- complete handshakes
 
-data LinkMode = InOrder | SwapHandshakePairs | Duplicate
-    deriving (Show, Eq)
+----------------------------------------------------------------
+-- datagrams
+
+prop_pack_datagrams :: Property
+prop_pack_datagrams = property $ do
+    limit <- choose (1, 300)
+    records <- listOf $ do
+        n <- choose (1, 400)
+        return $ B.replicate n 0x55
+    let dgrams = packDatagrams limit records
+    return $ conjoin
+        [ B.concat dgrams === B.concat records
+        -- only records which don't fit alone exceed the limit
+        , counterexample "oversized datagram" $
+            all (\d -> B.length d <= limit || d `elem` records) dgrams
+        -- a datagram is only closed when the next record doesn't fit in it
+        , counterexample "underfilled datagram" $
+            and [ B.length d + B.length (headRecord d') > limit | (d, d') <- zip dgrams (drop 1 dgrams) ]
+        ]
+  where headRecord d = B.takeWhile (== 0x55) d
+
+----------------------------------------------------------------
+-- complete handshakes
+
+data LinkMode = InOrder
+              | SwapHandshakePairs
+              | Duplicate
+              | LoseFirst (B.ByteString -> Bool) -- ^ the first datagram matching
+
+-- | Records of a datagram.
+datagramRecords :: B.ByteString -> [B.ByteString]
+datagramRecords d
+    | B.length d < 13 = []
+    | otherwise = let len = fromIntegral (B.index d 11) * 256 + fromIntegral (B.index d 12)
+                      (r, rest) = B.splitAt (13 + len) d
+                  in r : datagramRecords rest
+
+-- | Contains the (epoch 0, unencrypted) ServerHelloDone.
+serverHelloDone :: B.ByteString -> Bool
+serverHelloDone = any isSHD . datagramRecords
+  where isSHD r = B.length r > 13 && B.head r == 22 && B.index r 3 == 0 && B.index r 4 == 0 && B.index r 13 == 14
+
+-- | Starts with ChangeCipherSpec: only the server's last flight does, the
+-- client's begins with ClientKeyExchange.
+serverLastFlight :: B.ByteString -> Bool
+serverLastFlight d = not (B.null d) && B.head d == 20
 
 -- | One direction of a datagram link.
 relay :: LinkMode -> Chan B.ByteString -> Chan B.ByteString -> IO ()
@@ -196,9 +250,15 @@ relay Duplicate inp out = forever $ do
     d <- readChan inp
     writeChan out d
     writeChan out d
--- Datagrams carrying handshake records which are sent back to back are
--- delivered in reverse order: this splits fragmented messages and flights
--- the way some VPNs and multi-queue paths do.
+relay (LoseFirst lost) inp out = go False
+  where go done = do
+            d <- readChan inp
+            if not done && lost d
+                then go True
+                else writeChan out d >> go done
+-- Datagrams carrying handshake or ChangeCipherSpec records which are sent
+-- back to back are delivered in reverse order: this splits fragmented
+-- messages and flights the way some VPNs and multi-queue paths do.
 relay SwapHandshakePairs inp out = forever $ do
     a <- readChan inp
     if not (isHandshake a)
@@ -209,10 +269,13 @@ relay SwapHandshakePairs inp out = forever $ do
                 Nothing -> writeChan out a
                 Just b | isHandshake b -> writeChan out b >> writeChan out a
                        | otherwise     -> writeChan out a >> writeChan out b
-  where isHandshake d = not (B.null d) && B.head d == 22
+  where isHandshake d = not (B.null d) && (B.head d == 22 || B.head d == 20)
 
-prop_handshake_dtls :: LinkMode -> Property
-prop_handshake_dtls mode = once $ ioProperty $ do
+-- | Handshake between a client and a server, then exchange of application
+-- data, or (like DTLS-SRTP) none: the server then only answers the
+-- client's retransmissions after the handshake.
+prop_handshake_dtls :: LinkMode -> Bool -> Property
+prop_handshake_dtls mode appData = once $ ioProperty $ do
     cred <- generate $ arbitraryRSACredentialWithUsage [KeyUsage_digitalSignature, KeyUsage_keyEncipherment]
     c2s <- (,) <$> newChan <*> newChan
     s2c <- (,) <$> newChan <*> newChan
@@ -236,10 +299,22 @@ prop_handshake_dtls mode = once $ ioProperty $ do
                     }
             cCtx <- contextNew (backend (writeChan $ fst c2s) cRecv) cParams
             sCtx <- contextNew (backend (writeChan $ fst s2c) sRecv) sParams
-            let client = handshake cCtx >> sendData cCtx "ping" >> recvData cCtx
-                server = handshake sCtx >> recvData sCtx >>= \d -> sendData sCtx "pong" >> return d
-            r <- timeout 20000000 $ E.try $ concurrently client server
-            return $ case r of
-                Nothing                                 -> counterexample "timeout" False
-                Just (Left e)                           -> counterexample (show (e :: E.SomeException)) False
-                Just (Right (fromServer, fromClient))   -> (fromServer, fromClient) === ("pong", "ping")
+            if appData
+                then do
+                    let client = handshake cCtx >> sendData cCtx "ping" >> recvData cCtx
+                        server = handshake sCtx >> recvData sCtx >>= \d -> sendData sCtx "pong" >> return d
+                    r <- timeout 20000000 $ E.try $ concurrently client server
+                    return $ case r of
+                        Nothing                               -> counterexample "timeout" False
+                        Just (Left e)                         -> counterexample (show (e :: E.SomeException)) False
+                        Just (Right (fromServer, fromClient)) -> (fromServer, fromClient) === ("pong", "ping")
+                else do
+                    serverDone <- newEmptyMVar
+                    let server = handshake sCtx >> putMVar serverDone () >> handleDTLSRetransmissions sCtx
+                        client = handshake cCtx >> takeMVar serverDone
+                    r <- timeout 20000000 $ E.try $ race server client
+                    return $ case r of
+                        Nothing               -> counterexample "timeout" False
+                        Just (Left e)         -> counterexample (show (e :: E.SomeException)) False
+                        Just (Right (Left _)) -> counterexample "server stopped" False
+                        Just (Right (Right _)) -> property True

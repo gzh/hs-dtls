@@ -27,6 +27,7 @@ module Network.TLS.Core
     , sendData
     , recvData
     , recvData'
+    , handleDTLSRetransmissions
     , updateKey
     , KeyUpdateRequest(..)
     ) where
@@ -50,6 +51,7 @@ import Network.TLS.KeySchedule
 import Network.TLS.Types (Role(..), HostName)
 import Network.TLS.Util (catchException, mapChunks_)
 import Network.TLS.Extension
+import Network.TLS.Hooks (Logging(..))
 import qualified Network.TLS.State as S
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C8
@@ -101,6 +103,36 @@ sendData ctx dataToSend = liftIO $ do
         -- want to interleave writes from other threads in the middle of our
         -- possibly large write.
         mapM_ (mapChunks_ 16384 sendP) (L.toChunks dataToSend)
+
+-- | DTLS only: keep processing the records the peer sends after the
+-- handshake, for applications which don't exchange application data over
+-- DTLS (e.g. DTLS-SRTP). The side which sends the last flight of the
+-- handshake has no other way to learn that it was lost: the peer
+-- retransmits its own last flight then, which makes ours retransmitted
+-- (RFC 6347 4.2.4). Without this, a lost or reordered last flight stalls
+-- the peer's handshake.
+--
+-- Meant to be run in its own thread for the lifetime of the association,
+-- right after 'handshake'. Received application data is discarded; use
+-- 'recvData' instead, which handles retransmissions likewise, if the
+-- application data is needed. Returns when the peer closes the association
+-- or the connection reaches EOF, throws when the peer sends a fatal alert.
+-- Invalid records are ignored.
+handleDTLSRetransmissions :: MonadIO m => Context -> m ()
+handleDTLSRetransmissions ctx = liftIO $ withReadLock ctx loop
+  where loop = do
+            pkt <- recvPacket ctx
+            case pkt of
+                Left Error_EOF -> setEOF ctx
+                Left err -> do
+                    withLog ctx $ \logging -> loggingPacketRecv logging $
+                        "Ignored invalid record: " ++ show err
+                    loop
+                Right (Alert [(AlertLevel_Warning, CloseNotify)]) -> setEOF ctx
+                Right (Alert [(AlertLevel_Fatal, desc)]) -> do
+                    setEOF ctx
+                    E.throwIO (Terminated True ("received fatal error: " ++ show desc) (Error_Protocol ("remote side fatal error", True, desc)))
+                Right _ -> loop
 
 -- | Get data out of Data packet, and automatically renegotiate if a Handshake
 -- ClientHello is received.  An empty result means EOF.

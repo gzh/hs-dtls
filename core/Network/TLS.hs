@@ -14,6 +14,7 @@ module Network.TLS
     , handshake
     , sendData
     , recvData
+    , handleDTLSRetransmissions
     , bye
 
     -- * Backend abstraction

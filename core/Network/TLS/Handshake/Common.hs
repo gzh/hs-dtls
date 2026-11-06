@@ -92,6 +92,9 @@ sendChangeCipherAndFinish ctx role = do
     liftIO $ contextFlush ctx
     cf <- usingState_ ctx getVersion >>= \ver -> usingHState ctx $ getHandshakeDigest ver role
     sendPacket ctx (Handshake [Finished cf])
+    -- (DTLS) this can be the last flight of the handshake, no packet
+    -- reception follows to send it
+    when (ctxIsDTLS ctx) $ flushFlight ctx
     liftIO $ contextFlush ctx
 
 recvChangeCipherAndFinish :: Context -> IO ()

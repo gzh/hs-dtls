@@ -29,7 +29,8 @@ import Network.TLS.Cipher
 import Network.TLS.Util
 import Network.TLS.Imports
 
-import Network.TLS.Handshake.Reassembly (insertFragments)
+import Network.TLS.Handshake.Reassembly (insertFragments, FragmentOutcome(..))
+import Network.TLS.Flight (flightAcknowledged, retransmitFlightOnPeerRetransmission)
 import Network.TLS.Hooks
 import Data.IORef
 
@@ -88,7 +89,9 @@ switchRxEncryption ctx =
 -- which returns the messages which became ready, in message_seq order
 -- (possibly none). Fragments which cannot be used are discarded rather
 -- than failing the association (RFC 6347 4.1.2.7): the peer will
--- retransmit.
+-- retransmit. New data from the peer acknowledges our last flight; a
+-- retransmission of what we already processed means our response may
+-- have been lost, so it is retransmitted (RFC 6347 4.2.4).
 processHandshakeDTLS :: Context -> Version -> Fragment Plaintext -> IO (Either TLSError Packet)
 processHandshakeDTLS ctx ver fragment =
     case decodeHandshakeFragmentsDTLS (fragmentGetBytes fragment) of
@@ -96,8 +99,13 @@ processHandshakeDTLS ctx ver fragment =
             logDiscard $ "undecodable handshake record: " ++ show err
             return $ Right $ Handshake []
         Right frags -> do
-            (msgs, discarded) <- atomicModifyIORef' (ctxHandshakeReassembly ctx) (insertFragments frags)
-            mapM_ logDiscard discarded
+            (msgs, outcomes) <- atomicModifyIORef' (ctxHandshakeReassembly ctx) (insertFragments frags)
+            forM_ outcomes $ \o -> case o of
+                FragmentProgress           -> return ()
+                FragmentStale reason       -> logRecv $ "Stale handshake fragment: " ++ reason
+                FragmentDiscarded reason   -> logDiscard reason
+            when (FragmentProgress `elem` outcomes) $ flightAcknowledged ctx
+            when (any isStale outcomes) $ retransmitFlightOnPeerRetransmission ctx
             keyxchg <- getHState ctx >>= \hs -> return (hs >>= hstPendingCipher >>= Just . cipherKeyExchange)
             let currentParams = CurrentParams
                                 { cParamsVersion     = ver
@@ -105,5 +113,7 @@ processHandshakeDTLS ctx ver fragment =
                                 }
                 decode (ty, msgSeq, content) = DtlsHandshake msgSeq <$> decodeHandshake currentParams ty content
             return $ Handshake <$> mapM decode msgs
-  where logDiscard reason = withLog ctx $ \logging ->
-            loggingPacketRecv logging $ "Discarded handshake fragment: " ++ reason
+  where logRecv msg = withLog ctx $ \logging -> loggingPacketRecv logging msg
+        logDiscard reason = logRecv $ "Discarded handshake fragment: " ++ reason
+        isStale (FragmentStale _) = True
+        isStale _                 = False
